@@ -79,15 +79,47 @@
   (collect [c]
     (remove-entity @*current-map* c)))
 
+(def dir-offset {:left [-1 0]
+                 :right [1 0]
+                 :above [0 -1]
+                 :below [0 1]})
+
+(defn hit-rect [rect dir]
+  (let [[x y w h] rect
+        midy (+ y (/ h 2))
+        midx (+ x (/ w 2))
+        top-outside (- y 0.5)
+        bottom-inside (+ y (- h 0.5))
+        left-outside (- x 0.5)
+        right-inside (+ x (- w 0.5))
+        reduced-height (* 0.1 h)
+        reduced-width (* 0.1 w)]
+    
+    (condp = dir
+      :left
+      [left-outside (- midy (/ reduced-height 2)) 0.7 reduced-height]
+
+      :right
+      [right-inside (- midy (/ reduced-height 2)) 0.7 reduced-height]
+
+      :above
+      [(- midx (/ reduced-width 2)) top-outside reduced-width 0.7]
+
+      :below
+      [(- midx (/ reduced-width 2)) bottom-inside reduced-width 0.7])))
+
+(defn kind-towards? [rect dir kind]
+  (reduce
+   (fn [found idx]
+     (if found
+       found
+       (let [rec (get-map-idx @*current-map* idx)]
+         (when (kind rec) idx))))
+   nil
+   (rect->idxs @*current-map* (hit-rect rect dir))))
 
 (defn breakable-underneath? [rect]
-  (let [[x y w h] rect
-        test-rect [(+ x 0.1) (+ y h (- 0.1)) (- w 0.2) 0.3]
-        hit-idx (first (map-collisions @*current-map* test-rect))]
-    (when hit-idx
-      (let [hit (get-map-idx @*current-map* hit-idx)]
-        (if (:breakable hit)
-          hit-idx)))))
+  (kind-towards? rect :below :breakable))
 
 ;;; bag (we need to be able to tick this)
 (defrecord Bag [contents]
@@ -128,6 +160,11 @@
           (add-entity @*current-map* (add-collectable :rubble (idx->coords @*current-map* idx) map-rec))
           (cooldown-start state max-cooldown))))))
 
+(defn fillable? [rec]
+  (let [player-idx (coords->idx @*current-map* (rect-center (to-rect *player*)))
+        rec-idx (coords->idx @*current-map* (:coords rec))]
+    (and (= (:kind rec) :skip) (not (= player-idx rec-idx)))))
+
 (defrecord Rubble [position rec map-rec state]
   showoff.showoff.Rectable
   (to-rect [c] (posrec->rect position rec))
@@ -149,13 +186,9 @@
 
   Useable
   (use-thing [c user]
-    (let [[x y w h] (to-rect user)
-          tx (Math/ceil (+ x w))
-          idx (coords->idx @*current-map* tx (Math/floor y))
-          current (get-map-idx @*current-map* idx)]
-      (when (= (:kind current) :skip)
-        (set-map-idx @*current-map* idx map-rec)
-        (remove-from-bag c)))))
+    (when-let [idx (kind-towards? (to-rect user) (:direction @(:particle user)) fillable?)]
+      (set-map-idx @*current-map* idx map-rec)
+      (remove-from-bag c))))
 
 (defrecord Fist [rec state]
   Iconic
@@ -175,7 +208,7 @@
 (def *game-timer* nil)
 
 (defn draw-timer [ctx timer]
-  (let [time (:time @(:state timer))
+  (let [time (Math/ceil (:time @(:state timer)))
         minutes (Math/floor (/ time 60))
         seconds (mod time 60)]
     (draw-text-centered ctx *hud-font* (format "%2d:%02d" minutes seconds) [330 455])))
@@ -298,21 +331,20 @@
      ((input-state) (.-RIGHT gevents/KeyCodes))
      (swap! particle conj {:direction :right}))
 
+    ;; reset cooldown if no command keys are down
+    (when (not (or ((input-state) (.-DOWN gevents/KeyCodes))
+                   ((input-state) 32)))
+      (swap! particle conj {:cooldown 0}))
+
     ;; see if we're trying to use something
-    (when ((input-state) 32)
-      (use-thing (first @*bag*) player))
+    (when (and (is-cool? particle) ((input-state) 32))
+      (use-thing (first @*bag*) player)
+      (cooldown-start particle .3))
 
-    ;; cycle the bag
-    (cond
-     ;; no cooldown if keyup
-     (not ((input-state) (.-DOWN gevents/KeyCodes)))
-     (swap! particle conj {:cooldown 0})
-
-     ;; otherwise, only cycle after cooldown
-     (is-cool? particle)
-     (do
-       (reset! *bag* (conj (into [] (rest @*bag*)) (first @*bag*)))
-       (cooldown-start particle .3)))
+    ;; cycle after our cooldown is done
+    (when (and (is-cool? particle) ((input-state) (.-DOWN gevents/KeyCodes)))
+      (reset! *bag* (conj (into [] (rest @*bag*)) (first @*bag*)))
+      (cooldown-start particle .3))
     
     ;; look around our neighboring rects for collectables
     (doseq [idx (rect->idxs @*current-map* (to-rect player))]
@@ -325,7 +357,7 @@
             ;;(play-sound :powerup)
             ))))
     
-    ;; motion and collision detectin
+    ;; motion and collision detection
     (reset! particle (apply-particle-vs-map (integrate-particle @particle)
                                             @*current-map*
                                             (to-rect player)
