@@ -14,14 +14,13 @@
                                 set-display-and-viewport cycle-once
                                 head-bumped-map with-loaded-font draw-text
                                 draw-text-centered stats-string get-map-idx
-                                set-map-idx coords->idx])
+                                set-map-idx coords->idx format])
         (showoff.core :only [content clj->js Viewport prepare-input
                              keyboard-velocity-generator until-false
                              jump-velocity-generator ground-friction-generator
                              ]))
   (:require (goog.dom :as dom)
             (goog.string :as string)
-            (goog.string.format :as format)
             (goog.events :as gevents)
             (goog.Timer :as timer)
             (goog.events.KeyHandler :as geventskey)
@@ -32,8 +31,8 @@
 (def *current-map* (atom nil))
 (def *symbols* nil)
 
-(def *orange-font* nil)
-(def *font-chars* "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"?!./")
+(def *hud-font* nil)
+(def *font-chars* "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"?!./:")
 
 (def *backdrop* (get-img (str "graphics/backdrop.png?" (Math/random))))
 (def *player-sprite* nil)
@@ -79,6 +78,7 @@
   Collectable
   (collect [c]
     (remove-entity @*current-map* c)))
+
 
 (defn breakable-underneath? [rect]
   (let [[x y w h] rect
@@ -164,6 +164,22 @@
   Useable
   (use-thing [c] nil))
 
+(defrecord Timer [start state on-finished]
+  showoff.showoff.Tickable
+  (tick [c]
+    (let [last-time (or (:time @state) start)]
+      (swap! state conj {:time (- last-time showoff.showoff.+secs-per-tick+)})
+      (when (<= last-time 0)
+        (on-finished)))))
+
+(def *game-timer* nil)
+
+(defn draw-timer [ctx timer]
+  (let [time (:time @(:state timer))
+        minutes (Math/floor (/ time 60))
+        seconds (mod time 60)]
+    (draw-text-centered ctx *hud-font* (format "%2d:%02d" minutes seconds) [330 455])))
+
 (defn setup-symbols [sprites]
   (let [dims showoff.showoff.*tile-in-world-dims*]
     (set!
@@ -235,9 +251,9 @@
     ))
 
 (defn with-prepared-assets [callback]
-  (with-loaded-font "graphics/basic-font.gif" *font-chars* [8 8] 2 (color [196 106 59])
+  (with-loaded-font "graphics/basic-font.gif" *font-chars* [8 8] 2 (color [128 0 0])
     (fn [font]
-      (set! *orange-font* font)))
+      (set! *hud-font* font)))
 
   (with-img (str "graphics/hud.png?" (Math/random))
     (fn [hud]
@@ -287,9 +303,16 @@
       (use-thing (first @*bag*) player))
 
     ;; cycle the bag
-    (when (and (is-cool? particle) ((input-state) (.-DOWN gevents/KeyCodes)))
-      (reset! *bag* (conj (into [] (rest @*bag*)) (first @*bag*)))
-      (cooldown-start particle .3))
+    (cond
+     ;; no cooldown if keyup
+     (not ((input-state) (.-DOWN gevents/KeyCodes)))
+     (swap! particle conj {:cooldown 0})
+
+     ;; otherwise, only cycle after cooldown
+     (is-cool? particle)
+     (do
+       (reset! *bag* (conj (into [] (rest @*bag*)) (first @*bag*)))
+       (cooldown-start particle .3)))
     
     ;; look around our neighboring rects for collectables
     (doseq [idx (rect->idxs @*current-map* (to-rect player))]
@@ -363,10 +386,16 @@
                             +viewport-spring-constant+))
       (drag-force-generator +viewport-drag-coefficient+)]})))
 
+(def *game-running* false)
+
 (defn setup-world []
   (add-collectable :jackhammer [3 4] 0.3)
   (dotimes [ii 10]
-    (add-collectable :key [(+ 31 (* ii 2)) 2.5])))
+    (add-collectable :key [(+ 31 (* ii 2)) 2.5]))
+
+  (set! *game-timer* (Timer. 120 (atom {}) (fn [] (set! *game-running* false))))
+  (add-entity @*current-map* *game-timer*)
+  (set! *game-running* true))
 
 (defn prepare-sound []
   (let [sounds {:resources ["sounds/music2.ogg"
@@ -401,12 +430,14 @@
     ;; draw whatever is in the front of the bag
     (let [item (first @*bag*)]
       (.drawImage ctx (icon item) 593 430))
+
+    (draw-timer ctx *game-timer*)
     ))
 
 (defn game-loop []
   (cycle-once draw-world)
   ;(.loop jukebox.Manager)
-  true)
+  *game-running*)
 
 (defn ^:export game []
   (let [screen-size [640 480]
