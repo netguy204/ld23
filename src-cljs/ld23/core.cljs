@@ -14,7 +14,7 @@
                                 set-display-and-viewport cycle-once
                                 head-bumped-map with-loaded-font draw-text
                                 draw-text-centered stats-string get-map-idx
-                                set-map-idx coords->idx format])
+                                set-map-idx coords->idx format get-pixel get-pixel-data])
         (showoff.core :only [content clj->js Viewport prepare-input
                              keyboard-velocity-generator until-false
                              jump-velocity-generator ground-friction-generator
@@ -213,71 +213,114 @@
         seconds (mod time 60)]
     (draw-text-centered ctx *hud-font* (format "%2d:%02d" minutes seconds) [330 455])))
 
+(defn fill-template [pdata [px py] sym]
+  (let [[dw dh] showoff.showoff.*tile-in-world-dims*
+        [sw sh] (:dims pdata)
+        pw (/ dw 16)
+        ph (/ dh 16)
+        num-pixels (* 16 16)
+        canvas (make-canvas [dw dh])
+        ctx (context canvas)
+        [br bg bb] sym]
+    (dotimes [ii num-pixels]
+      (let [x (mod ii 16)
+            y (Math/floor (/ ii 16))
+            src-x (+ px x)
+            src-y (+ py y)
+            [scale _ _] (get-pixel pdata src-x src-y)
+            scale (/ scale 255)]
+        
+        (set! (.-fillStyle ctx) (color [(Math/round (* scale br))
+                                        (Math/round (* scale bg))
+                                        (Math/round (* scale bb))]))
+        (.fillRect ctx (Math/floor (* x pw)) (Math/floor (* y ph))
+                   (Math/ceil pw) (Math/ceil ph))))
+
+    {:kind :image
+     :image canvas
+     :collidable true
+     :shape :rect
+     :breakable true}))
+
+(defn make-symbol-generator [base-symbols pdata templates [startx starty]]
+  (let [cache (atom {})]
+    (fn [sym]
+      (if-let [result (base-symbols sym)]
+        result
+        (let [template (Math/floor (* templates (Math/random)))
+              cache-key [sym template]]
+          (if-let [result (@cache cache-key)]
+            result
+            (let [filled-template (fill-template pdata [(+ startx (* template 16)) starty] sym)]
+              (swap! cache conj {cache-key filled-template})
+              filled-template)))))))
+
 (defn setup-symbols [sprites]
-  (let [dims showoff.showoff.*tile-in-world-dims*]
-    (set!
-     *symbols*
-     {[255 255 255]
-      {:kind :skip}
+  (let [dims showoff.showoff.*tile-in-world-dims*
+        pdata (get-pixel-data sprites)
+        base-symbols {[255 255 255]
+                      {:kind :skip}
       
-      [0 0 0]
-      {:kind :image
-       :image (resize-nearest-neighbor sprites [0 16 16 16] dims)
-       :collidable true
-       :shape :rect}
+                      [0 0 0]
+                      {:kind :image
+                       :image (resize-nearest-neighbor pdata [0 16 16 16] dims)
+                       :collidable true
+                       :shape :rect}
 
-      [0 255 0]
-      {:kind :image
-       :image (resize-nearest-neighbor sprites [0 32 16 16] dims)
-       :collidable true
-       :breakable true
-       :shape :rect}
-
-      [102 102 102]
-      {:kind :image
-       :image (resize-nearest-neighbor sprites [16 32 16 16] dims)
-       :collidable true
-       :breakable true
-       :shape :rect}
-
-      [204 204 204]
-      {:kind :image
-       :image (resize-nearest-neighbor sprites [16 16 16 16] dims)
-       :collidable true
-       :breakable true
-       :shape :rect}
-
-      [0 0 255]
-      {:kind :image
-       :image (resize-nearest-neighbor sprites [32 32 16 16] dims)
-       :collidable false}
-      
-      })
+                      [0 255 0]
+                      {:kind :image
+                       :image (resize-nearest-neighbor pdata [0 32 16 16] dims)
+                       :collidable true
+                       :breakable true
+                       :shape :rect}
+                      
+                      [102 102 102]
+                      {:kind :image
+                       :image (resize-nearest-neighbor pdata [16 32 16 16] dims)
+                       :collidable true
+                       :breakable true
+                       :shape :rect}
+                      
+                      [204 204 204]
+                      {:kind :image
+                       :image (resize-nearest-neighbor pdata [16 16 16 16] dims)
+                       :collidable true
+                       :breakable true
+                       :shape :rect}
+                      
+                      [0 0 255]
+                      {:kind :image
+                       :image (resize-nearest-neighbor pdata [32 32 16 16] dims)
+                       :collidable false}
+                      
+                      }]
+    
+    (set! *symbols* (make-symbol-generator base-symbols pdata 3 [0 48]))
 
     (set! *player-sprite*
-          {:left (resize-nearest-neighbor sprites [0 0 16 16] dims)
-           :right (resize-nearest-neighbor sprites [16 0 16 16] dims)})
+          {:left (resize-nearest-neighbor pdata [0 0 16 16] dims)
+           :right (resize-nearest-neighbor pdata [16 0 16 16] dims)})
 
     (set! *collectables*
           {:key
-           {:image (resize-nearest-neighbor sprites [32 0 16 24] [(nth dims 0)
+           {:image (resize-nearest-neighbor pdata [32 0 16 24] [(nth dims 0)
                                                                   (* 1.5 (nth dims 1))])
             :dims [1 1.5]
             :spawn (fn [pos rec] (StaticCollectable. pos rec))
             }
            
            :jackhammer
-           {:image (resize-nearest-neighbor sprites [48 0 16 16] dims)
+           {:image (resize-nearest-neighbor pdata [48 0 16 16] dims)
             :dims [1 1]
             :spawn (fn [pos rec cooldown] (Jackhammer. pos rec cooldown (atom {})))}
 
            :rubble
-           {:image (resize-nearest-neighbor sprites [48 32 16 16] dims)
+           {:image (resize-nearest-neighbor pdata [48 32 16 16] dims)
             :dims [0.8 0.8]
             :spawn (fn [pos rec map-rec] (Rubble. pos rec map-rec (atom {:cooldown 0.5})))}
            })
     
-    (let [fist-rec {:image (resize-nearest-neighbor sprites [48 16 16 16] dims)
+    (let [fist-rec {:image (resize-nearest-neighbor pdata [48 16 16 16] dims)
                     :dims [1 1]}]
       (swap! *bag* conj (Fist. fist-rec (atom {}))))
     
@@ -290,13 +333,12 @@
 
   (with-img (str "graphics/hud.png?" (Math/random))
     (fn [hud]
-      (let [[w h] (img-dims hud)]
-        (set! *hud* (resize-nearest-neighbor hud [0 0 w h] [640 480])))
+      (set! *hud* (resize-nearest-neighbor (get-pixel-data hud) [640 480]))
       
       (with-img (str "graphics/sprites.png?" (Math/random))
         (fn [sprites]
           (setup-symbols sprites)
-          (with-img (str "graphics/world.gif?" (Math/random))
+          (with-img (str "graphics/world2.gif?" (Math/random))
             (fn [map-img]
               (reset! *current-map* (load-map map-img *symbols*))
               (callback))))))))
@@ -376,7 +418,7 @@
   (Player.
    (atom
     {:mass 5
-     :position [5 3]
+     :position [5 5]
      :velocity [0 0]
     
      ;; bring to a stop quickly
@@ -406,7 +448,7 @@
    [16 10]
    (atom
     {:mass 1
-     :position [5 3]
+     :position [5 5]
      :velocity [0 0]
      
      ;; try to keep the player character basically centered
@@ -421,11 +463,11 @@
 (def *game-running* false)
 
 (defn setup-world []
-  (add-collectable :jackhammer [3 4] 0.3)
-  (dotimes [ii 10]
-    (add-collectable :key [(+ 31 (* ii 2)) 2.5]))
+  (add-collectable :jackhammer [9 5] 0.3)
+  (doseq [p [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49]]]
+    (add-collectable :key p))
 
-  (set! *game-timer* (Timer. 120 (atom {}) (fn [] (set! *game-running* false))))
+  (set! *game-timer* (Timer. 360 (atom {}) (fn [] (set! *game-running* false))))
   (add-entity @*current-map* *game-timer*)
   (set! *game-running* true))
 
