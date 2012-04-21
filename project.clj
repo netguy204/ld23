@@ -20,6 +20,7 @@
      {:output-to "javascripts/compiled.js"
       :optimizations :advanced
       :pretty-print false
+      :externs ["jukebox-externs.js"]
       }
      :id "advanced"
      }
