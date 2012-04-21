@@ -1,0 +1,3 @@
+[submodule "showoff"]
+	path = showoff
+	url = git@github.com:netguy204/showoff-cljs.git
