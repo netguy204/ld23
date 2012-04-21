@@ -381,14 +381,14 @@
     
      ;; bring to a stop quickly
      :force-generators
-     [(drag-force-generator 2.0)
+     [(drag-force-generator 1.0)
       (ground-friction-generator *current-map* #(to-rect *player*) 30)
       (gravity-force-generator 16)
       (keyboard-velocity-generator
        (.-LEFT gevents/KeyCodes) [(- *player-speed*) 0])
       (keyboard-velocity-generator
        (.-RIGHT gevents/KeyCodes) [*player-speed* 0])
-      (jump-velocity-generator *current-map* #(to-rect *player*) 400 0.5)
+      (jump-velocity-generator *current-map* #(to-rect *player*) 300 0.5)
       ]
      })))
 
@@ -397,8 +397,8 @@
         coll (apply (:spawn rec) pos rec more)]
     (add-entity @*current-map* coll)))
 
-(def +viewport-spring-constant+ 50)
-(def +viewport-drag-coefficient+ 3)
+(def +viewport-spring-constant+ 60)
+(def +viewport-drag-coefficient+ 2)
 (def +viewport-max-displacement+ 2)
 
 (def *viewport*
@@ -413,7 +413,7 @@
      :force-generators
      [(fn [p] (spring-force (vec-sub (:position @(:particle *player*))
                                      (vec-sub (rect-center (viewport-rect))
-                                              [0 1]))
+                                              [0 2]))
                             +viewport-max-displacement+
                             +viewport-spring-constant+))
       (drag-force-generator +viewport-drag-coefficient+)]})))
