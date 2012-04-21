@@ -3,7 +3,7 @@
                                 Rectable Tickable Drawable
                                 vec-add vec-dot vec-scale vec-sub vec-unit
                                 rect-center viewport-rect clear display
-                                tick-entities tick to-rect draw
+                                tick-entities tick to-rect draw rect-intersect
                                 drag-force-generator gravity-force-generator
                                 integrate-particle spring-force
                                 apply-particle-vs-map load-map draw-map
@@ -13,7 +13,7 @@
                                 resize-nearest-neighbor record-vs-rect
                                 set-display-and-viewport cycle-once
                                 head-bumped-map with-loaded-font draw-text
-                                draw-text-centered stats-string])
+                                draw-text-centered stats-string get-map-idx])
         (showoff.core :only [content clj->js Viewport prepare-input
                              keyboard-velocity-generator until-false
                              jump-velocity-generator ground-friction-generator
@@ -36,7 +36,7 @@
 
 (def *backdrop* (get-img (str "graphics/backdrop.png?" (Math/random))))
 (def *player-sprite* nil)
-
+(def *collectables* nil)
 
 (defn setup-symbols [sprites]
   (let [dims showoff.showoff.*tile-in-world-dims*]
@@ -67,7 +67,17 @@
 
     (set! *player-sprite*
           {:left (resize-nearest-neighbor sprites [0 0 16 16] dims)
-           :right (resize-nearest-neighbor sprites [16 0 16 16] dims)})))
+           :right (resize-nearest-neighbor sprites [16 0 16 16] dims)})
+
+    (set! *collectables*
+          {:key
+           {:image (resize-nearest-neighbor sprites [32 0 16 24] [(nth dims 0)
+                                                                  (* 1.5 (nth dims 1))])
+            :dims [1 1.5]}
+           
+           })
+    
+    ))
 
 (defn with-prepared-assets [callback]
   (with-loaded-font "graphics/basic-font.gif" *font-chars* [8 8] 2 (color [196 106 59])
@@ -98,6 +108,31 @@
 (defn input-state []
   showoff.core.*command-state-map*)
 
+(extend-type js/HTMLCanvasElement
+  IHash
+  (-hash [c] (goog.getUid c)))
+
+(defprotocol Collectable
+  (collect [c]))
+
+(defrecord StaticCollectable [position rec]
+  showoff.showoff.Rectable
+  (to-rect [c]
+    (let [[px py] position
+          [w h] (:dims rec)]
+      [px py w h]))
+
+  showoff.showoff.Drawable
+  (draw [c ctx]
+    (draw-sprite ctx (:image rec) position))
+
+  Collectable
+  (collect [c]
+    true))
+
+(defn collectable? [o]
+  (satisfies? Collectable o))
+
 (defrecord Player [particle]
   showoff.showoff.Rectable
   (to-rect [player]
@@ -107,12 +142,22 @@
   showoff.showoff.Tickable
   (tick [player]
     ;; record the last directon of motion so we can draw our sprite
+    ;; facing that way
     (cond
      ((input-state) (.-LEFT gevents/KeyCodes))
      (swap! particle conj {:direction :left})
 
      ((input-state) (.-RIGHT gevents/KeyCodes))
      (swap! particle conj {:direction :right}))
+
+    ;; look around our neighboring rects for collectables
+    (doseq [idx (rect->idxs @*current-map* (to-rect player))]
+      (let [rec (get-map-idx @*current-map* idx)
+            objects (:objects rec)
+            collectables (filter collectable? @objects)]
+        (doseq [collectable collectables]
+          (when (rect-intersect (to-rect collectable) (to-rect player))
+            (remove-entity @*current-map* collectable)))))
     
     ;; motion and collision detectin
     (reset! particle (apply-particle-vs-map (integrate-particle @particle)
@@ -148,6 +193,11 @@
       ]
      })))
 
+(defn add-collectable [key pos]
+  (let [rec (*collectables* key)
+        coll (StaticCollectable. pos rec)]
+    (add-entity @*current-map* coll)))
+
 (def +viewport-spring-constant+ 50)
 (def +viewport-drag-coefficient+ 3)
 (def +viewport-max-displacement+ 2)
@@ -169,6 +219,10 @@
                             +viewport-spring-constant+))
       (drag-force-generator +viewport-drag-coefficient+)]})))
 
+(defn setup-world []
+  (dotimes [ii 10]
+    (add-collectable :key [(+ 31 (* ii 2)) 1.5])))
+
 (defn ^:export game []
   (let [screen-size [640 480]
         canvas (make-canvas screen-size)]
@@ -178,10 +232,10 @@
     (prepare-input)
     (add-entity @*current-map* *viewport*)
     (add-entity @*current-map* *player*)
-    (with-prepared-assets #(until-false game-loop))))
-
-
-
+    (with-prepared-assets
+      (fn []
+        (setup-world)
+        (until-false game-loop)))))
 
 
 (defn ^:export map-viewer []
@@ -211,7 +265,10 @@
     (set-display-and-viewport canvas screen-size #(to-rect viewport))
     (prepare-input)
     (add-entity {} viewport)
-    (with-prepared-assets #(until-false game-loop))))
+    (with-prepared-assets
+      (fn []
+        (setup-world)
+        (until-false game-loop)))))
 
 
 
