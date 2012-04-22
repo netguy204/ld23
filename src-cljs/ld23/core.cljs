@@ -168,6 +168,31 @@
         (add-entity @*current-map* (add-collectable :rubble (idx->coords @*current-map* idx) (take-brick idx)))
         (cooldown-start state max-cooldown)))))
 
+(defrecord Blowtorch [position rec max-cooldown state]
+  showoff.showoff.Rectable
+  (to-rect [c] (posrec->rect position rec))
+
+  showoff.showoff.Drawable
+  (draw [c ctx] (draw-sprite ctx (:image rec) position))
+
+  showoff.showoff.Tickable
+  (tick [c] (cooldown-tick state))
+
+  Iconic
+  (icon [c] (:image rec))
+  
+  Collectable
+  (collect [c]
+    (remove-entity @*current-map* c)
+    (add-to-bag c))
+
+  Useable
+  (use-thing [c user]
+    (when (is-cool? state)
+      (if-let [idx (kind-towards? (to-rect user) (:direction @(:particle user)) :breakable)]
+        (add-entity @*current-map* (add-collectable :rubble (idx->coords @*current-map* idx) (take-brick idx)))
+        (cooldown-start state max-cooldown)))))
+
 (defn fillable? [rec]
   (let [player-idx (coords->idx @*current-map* (rect-center (to-rect *player*)))
         rec-idx (coords->idx @*current-map* (:coords rec))]
@@ -184,8 +209,11 @@
   Useable
   (use-thing [c user]
     (let [item (first @contents)]
-      (use-thing item user))
-    (swap! contents rest)))
+      (when (use-thing item user)
+        (swap! contents rest)))
+    
+    (when (empty? @contents)
+      (remove-from-bag c))))
 
 (defn add-with-stacking [item kind rec]
   (if-let [stack (first (filter #(= (:kind %) kind) @*bag*))]
@@ -214,7 +242,8 @@
   Useable
   (use-thing [c user]
     (when-let [idx (kind-towards? (to-rect user) (:direction @(:particle user)) fillable?)]
-      (set-map-idx @*current-map* idx (conj map-rec {:used true})))))
+      (set-map-idx @*current-map* idx (conj map-rec {:used true}))
+      true)))
 
 (defrecord Fist [rec state]
   Iconic
@@ -339,6 +368,11 @@
            {:image (resize-nearest-neighbor pdata [48 0 16 16] dims)
             :dims [1 1]
             :spawn (fn [pos rec cooldown] (Jackhammer. pos rec cooldown (atom {})))}
+
+           :blowtorch
+           {:image (resize-nearest-neighbor pdata [48 48 16 16] dims)
+            :dims [1 1]
+            :spawn (fn [pos rec cooldown] (Blowtorch. pos rec cooldown (atom {})))}
 
            :rubble
            {:image (resize-nearest-neighbor pdata [48 32 16 16] dims)
@@ -490,6 +524,7 @@
 
 (defn setup-world []
   (add-collectable :jackhammer [9 5] 0.3)
+  (add-collectable :blowtorch [5 22] 0.3)
   (doseq [p [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49]]]
     (add-collectable :key p))
 
@@ -497,7 +532,7 @@
         (Timer. 180 (atom {})
                 (fn []
                   (set! *game-running* false)
-                  (js/alert (format "You caused %d worth of damage and found %d keys!"
+                  (js/alert (format "You caused $%d worth of damage and found %d keys!"
                                     (* @*bricks-destroyed* 1000)
                                     @*keys-collected*)))))
   
@@ -543,7 +578,7 @@
 
 (defn game-loop []
   (cycle-once draw-world)
-  ;(.loop jukebox.Manager)
+  (.loop jukebox.Manager)
   *game-running*)
 
 (defn ^:export game []
@@ -559,7 +594,7 @@
     (with-prepared-assets
       (fn []
         (setup-world)
-        ;(prepare-sound)
+        (prepare-sound)
         (until-false game-loop)))))
 
 
