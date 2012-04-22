@@ -1,8 +1,9 @@
 (ns ld23.core
-  (:use (showoff.showoff :only [get-img remove-entity add-entity supported-by-map
+  (:use (showoff.showoff :only [get-img remove-entity add-entity clear-entities
+                                supported-by-map
                                 Rectable Tickable Drawable
                                 vec-add vec-dot vec-scale vec-sub vec-unit
-                                vec-mag vec-negate
+                                vec-mag vec-negate reset-tick-clock
                                 rect-center viewport-rect clear display
                                 tick-entities tick to-rect draw rect-intersect
                                 drag-force-generator gravity-force-generator
@@ -14,12 +15,12 @@
                                 resize-nearest-neighbor record-vs-rect
                                 set-display-and-viewport cycle-once
                                 head-bumped-map with-loaded-font draw-text
-                                draw-text-centered stats-string get-map-idx
+                                draw-text-centered stats-string get-map-idx fill-style
                                 set-map-idx coords->idx format get-pixel get-pixel-data])
         (showoff.core :only [content clj->js Viewport prepare-input
                              keyboard-velocity-generator until-false
                              jump-velocity-generator ground-friction-generator
-                             ]))
+                             request-animation]))
   (:require (goog.dom :as dom)
             (goog.string :as string)
             (goog.events :as gevents)
@@ -28,7 +29,7 @@
             (clojure.browser.event :as event)
             (clojure.browser.repl :as repl)))
 
-
+(def *canvas* nil)
 (def *current-map* (atom nil))
 (def *symbols* nil)
 
@@ -111,6 +112,9 @@
 
 (defn remove-from-bag [item]
   (reset! *bag* (into [] (filter #(not (= item %)) @*bag*))))
+
+(defn empty-bag []
+  (reset! *bag* []))
 
 (defn take-brick [idx]
   (let [rec (get-map-idx @*current-map* idx)]
@@ -227,13 +231,13 @@
   Useable
   (use-thing [c] nil))
 
-(defrecord Timer [start state on-finished]
+(defrecord Timer [start state]
   showoff.showoff.Tickable
   (tick [c]
     (let [last-time (or (:time @state) start)]
       (swap! state conj {:time (- last-time showoff.showoff.+secs-per-tick+)})
       (when (<= last-time 0)
-        (on-finished)))))
+        (swap! state conj {:time 0})))))
 
 (def *game-timer* nil)
 
@@ -352,12 +356,12 @@
            {:image (resize-nearest-neighbor pdata [48 32 16 16] dims)
             :dims [1 1]
             :spawn (fn [pos rec map-rec] (Rubble. pos rec map-rec (atom {:cooldown 0.2})))}
+
+           ;; not really collectable... that would be weird.
+           :fist
+           {:image (resize-nearest-neighbor pdata [48 16 16 16] dims)
+            :dims [1 1]}
            })
-    
-    (let [fist-rec {:image (resize-nearest-neighbor pdata [48 16 16 16] dims)
-                    :dims [1 1]}]
-      (swap! *bag* conj (Fist. fist-rec (atom {}))))
-    
     ))
 
 (defn with-prepared-assets [callback]
@@ -378,8 +382,12 @@
               (callback))))))))
 
 
+(def ^:dynamic *command-state-override* nil)
+
 (defn input-state []
-  showoff.core.*command-state-map*)
+  (if *command-state-override*
+    *command-state-override*
+    showoff.core.*command-state-map*))
 
 (extend-type js/HTMLCanvasElement
   IHash
@@ -448,25 +456,7 @@
 
 ;;; the particle provides keyboard interaction, jumping, etc
 (def *player-speed* 40)
-(def *player*
-  (Player.
-   (atom
-    {:mass 5
-     :position [5 5]
-     :velocity [0 0]
-    
-     ;; bring to a stop quickly
-     :force-generators
-     [(drag-force-generator 1.0)
-      (ground-friction-generator *current-map* #(to-rect *player*) 30)
-      (gravity-force-generator 20)
-      (keyboard-velocity-generator
-       (.-LEFT gevents/KeyCodes) [(- *player-speed*) 0])
-      (keyboard-velocity-generator
-       (.-RIGHT gevents/KeyCodes) [*player-speed* 0])
-      (jump-velocity-generator *current-map* #(to-rect *player*) 300 0.5)
-      ]
-     })))
+(def *player* nil)
 
 (defn add-collectable [key pos & more]
   (let [rec (*collectables* key)
@@ -477,47 +467,73 @@
 (def +viewport-drag-coefficient+ 2)
 (def +viewport-max-displacement+ 2)
 
-(def *viewport*
-  (Viewport.
-   [20 15]
-   (atom
-    {:mass 1
-     :position [5 5]
-     :velocity [0 0]
-     
-     ;; try to keep the player character basically centered
-     :force-generators
-     [(fn [p] (spring-force (vec-sub (:position @(:particle *player*))
-                                     (vec-sub (rect-center (viewport-rect))
-                                              [0 2]))
-                            +viewport-max-displacement+
-                            +viewport-spring-constant+))
-      (drag-force-generator +viewport-drag-coefficient+)
+(def *viewport* nil)
 
-      ;; bring to rest if we're not moving very fast
-      (fn [p]
-        (let [spd (vec-mag (:velocity p))
-              drag-dir (vec-negate (vec-unit (:velocity p)))]
-          (vec-scale drag-dir (* spd 0.3))))]})))
+(defn setup-world [callback]
+  (empty-bag)
+  (clear-entities)
+  (swap! *bag* conj (Fist. (:fist *collectables*) (atom {})))
 
-(def *game-running* false)
+  (set!
+   *player*
+   (Player.
+    (atom
+     {:mass 5
+      :position [5 5]
+      :velocity [0 0]
+    
+      ;; bring to a stop quickly
+      :force-generators
+      [(drag-force-generator 1.0)
+       (ground-friction-generator *current-map* #(to-rect *player*) 30)
+       (gravity-force-generator 20)
+       (keyboard-velocity-generator
+        (.-LEFT gevents/KeyCodes) [(- *player-speed*) 0])
+       (keyboard-velocity-generator
+        (.-RIGHT gevents/KeyCodes) [*player-speed* 0])
+       (jump-velocity-generator *current-map* #(to-rect *player*) 300 0.5)
+       ]
+      })))
 
-(defn setup-world []
+  (set!
+   *viewport*
+   (Viewport.
+    [20 15]
+    (atom
+     {:mass 1
+      :position [5 5]
+      :velocity [0 0]
+      
+      ;; try to keep the player character basically centered
+      :force-generators
+      [(fn [p] (spring-force (vec-sub (:position @(:particle *player*))
+                                      (vec-sub (rect-center (viewport-rect))
+                                               [0 2]))
+                             +viewport-max-displacement+
+                             +viewport-spring-constant+))
+       (drag-force-generator +viewport-drag-coefficient+)
+       
+       ;; bring to rest if we're not moving very fast
+       (fn [p]
+         (let [spd (vec-mag (:velocity p))
+               drag-dir (vec-negate (vec-unit (:velocity p)))]
+           (vec-scale drag-dir (* spd 0.3))))]})))
+
+  (set-display-and-viewport *canvas* [640 480] #(to-rect *viewport*))
+  
   (add-collectable :jackhammer [9 5] 0.3)
   (add-collectable :blowtorch [5 22] 0.3)
   (doseq [p [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49]]]
     (add-collectable :key p))
 
-  (set! *game-timer*
-        (Timer. 180 (atom {})
-                (fn []
-                  (set! *game-running* false)
-                  (js/alert (format "You caused $%d worth of damage and found %d keys!"
-                                    (* @*bricks-destroyed* 1000)
-                                    @*keys-collected*)))))
+  (add-entity @*current-map* *viewport*)
+  (add-entity @*current-map* *player*)
+  (add-entity @*current-map* (Bag. *bag*))
   
+  (set! *game-timer* (Timer. 15 (atom {})))
   (add-entity @*current-map* *game-timer*)
-  (set! *game-running* true))
+  
+  (callback))
 
 (defn prepare-sound []
   (let [sounds {:resources ["sounds/music2.ogg"
@@ -536,46 +552,141 @@
     (set! jukebox.Manager (jukebox.Manager. (clj->js mgrconfig)))
     (set! *media-player* (jukebox.Player. (clj->js sounds)))))
 
-(defn draw-world []
-  (clear)
-  (let [ctx (context)
-        [vx vy _ _] (viewport-rect)]
-    (.drawImage ctx *backdrop* (- (* vx 9)) (- (* vy 9)))
-    (draw-map @*current-map*)
-    (draw-entities)
-    (draw-player ctx *player*)
+(defn draw-world [ticks]
+  ;; only draw if we actually ticked
+  (when (> ticks 0)
+    (clear)
+    (let [ctx (context)
+          [vx vy _ _] (viewport-rect)]
+      (.drawImage ctx *backdrop* (- (* vx 9)) (- (* vy 9)))
+      (draw-map @*current-map*)
+      (draw-entities)
+      (draw-player ctx *player*)
+      
+      ;; draw the hud
+      (let [[w h] (img-dims *hud*)]
+        (.drawImage ctx *hud* 0 0 w h 0 0 640 480))
+      
+      ;; draw whatever is in the front of the bag
+      (let [item (first @*bag*)]
+        (.drawImage ctx (icon item) 592 436))
+      
+      (draw-timer ctx *game-timer*)))
+  
+  ;; next state
+  (if (= (Math/ceil (:time @(:state *game-timer*))) 0)
+    :show-score
+    :game))
 
-    ;; draw the hud
-    (let [[w h] (img-dims *hud*)]
-      (.drawImage ctx *hud* 0 0 w h 0 0 640 480))
+(def *base-dialog* nil)
+(def *instructions* nil)
 
-    ;; draw whatever is in the front of the bag
-    (let [item (first @*bag*)]
-      (.drawImage ctx (icon item) 592 436))
+(defn with-dialog-assets [callback]
+  (with-img "graphics/dialog.png"
+    (fn [dialog]
+      (set! *base-dialog* (resize-nearest-neighbor (get-pixel-data dialog) [640 480]))
+      (with-img "graphics/instructions.png"
+        (fn [instr]
+          (set! *instructions* (resize-nearest-neighbor (get-pixel-data instr) [648 480]))
+          (callback))))))
 
-    (draw-timer ctx *game-timer*)
-    ))
+(def *instruction-time* (atom nil))
+
+(defn instructions-setup [callback]
+  (with-prepared-assets
+    (fn []
+      (with-dialog-assets
+        (fn []
+          (reset! *instruction-time* 5)
+          (reset-tick-clock)
+          (callback))))))
+
+(defn instructions-screen [ticks]
+  (let [ctx (context)]
+    ;; black background
+    (fill-style ctx (color [0 0 0]))
+    (.fillRect ctx 0 0 640 480)
+
+    ;; dialog
+    (.drawImage ctx *base-dialog* 0 0)
+
+    ;; instructions icons
+    (.drawImage ctx *instructions* 0 0)
+
+    (reset! *instruction-time*
+            (- @*instruction-time*
+               (* ticks showoff.showoff.+secs-per-tick+)))
+    (if (> @*instruction-time* 0)
+      :start
+      :game)))
+
+(def *game-states*
+  {:start
+   {:setup instructions-setup
+    :after-ticks instructions-screen}
+
+   :game
+   {:setup setup-world
+    :after-ticks draw-world}
+
+   :show-score
+   {:after-ticks (fn []
+                   (set! *game-running* false)
+                   (js/alert (format "You caused $%d worth of damage and found %d keys!"
+                                     (* @*bricks-destroyed* 1000)
+                                     @*keys-collected*))
+                   (clear-entities)
+                   :start)}
+   
+   })
+
+(def *current-game-state* (atom nil))
+
+(defn perform-after-ticks [ticks]
+  (let [after-ticks (:after-ticks (@*current-game-state* *game-states*))]
+    (after-ticks ticks)))
+
+(defn with-changed-game-state [new-state callback]
+  (let [change-complete (fn []
+                          (reset! *current-game-state* new-state)
+                          (callback))]
+    (if (not (= @*current-game-state* new-state))
+      ;; actually changing state
+      (if-let [setup (:setup (new-state *game-states*))]
+        ;; we have a setup function, run and finish the state change
+        ;; when it's done
+        (setup change-complete)
+        ;; no setup function
+        (change-complete))
+      
+      ;; not really changing state so we don't look for a setup function
+      (change-complete))))
+
 
 (defn game-loop []
-  (cycle-once draw-world)
-  (.loop jukebox.Manager)
-  *game-running*)
+  (if (= @*current-game-state* nil)
+    ;; set the state to start
+    (with-changed-game-state :start
+      (fn []
+        (perform-after-ticks 0)
+        (request-animation game-loop (display))))
+
+    ;; otherwise, perform in our current state
+    (let [next-state (cycle-once perform-after-ticks)]
+      (with-changed-game-state next-state
+        (fn []
+          (request-animation game-loop (display)))))))
 
 (defn ^:export game []
   (let [screen-size [640 480]
         canvas (make-canvas screen-size)]
     
     (dom/appendChild (content) canvas)
-    (set-display-and-viewport canvas [640 480] #(to-rect *viewport*))
+    (set! *canvas* canvas)
+    (set-display-and-viewport *canvas* [640 480] #(vector 0 0 20 15))
+    
     (prepare-input)
-    (add-entity @*current-map* *viewport*)
-    (add-entity @*current-map* *player*)
-    (add-entity @*current-map* (Bag. *bag*))
-    (with-prepared-assets
-      (fn []
-        (setup-world)
-        (prepare-sound)
-        (until-false game-loop 0)))))
+    (game-loop)))
 
 
 (defn ^:export map-viewer []
