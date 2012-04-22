@@ -2,6 +2,7 @@
   (:use (showoff.showoff :only [get-img remove-entity add-entity supported-by-map
                                 Rectable Tickable Drawable
                                 vec-add vec-dot vec-scale vec-sub vec-unit
+                                vec-mag vec-negate
                                 rect-center viewport-rect clear display
                                 tick-entities tick to-rect draw rect-intersect
                                 drag-force-generator gravity-force-generator
@@ -88,39 +89,13 @@
                  :above [0 -1]
                  :below [0 1]})
 
-(defn hit-rect [rect dir]
-  (let [[x y w h] rect
-        midy (+ y (/ h 2))
-        midx (+ x (/ w 2))
-        top-outside (- y 0.5)
-        bottom-inside (+ y (- h 0.5))
-        left-outside (- x 0.5)
-        right-inside (+ x (- w 0.5))
-        reduced-height (* 0.1 h)
-        reduced-width (* 0.1 w)]
-    
-    (condp = dir
-      :left
-      [left-outside (- midy (/ reduced-height 2)) 0.7 reduced-height]
-
-      :right
-      [right-inside (- midy (/ reduced-height 2)) 0.7 reduced-height]
-
-      :above
-      [(- midx (/ reduced-width 2)) top-outside reduced-width 0.7]
-
-      :below
-      [(- midx (/ reduced-width 2)) bottom-inside reduced-width 0.7])))
-
 (defn kind-towards? [rect dir kind]
-  (reduce
-   (fn [found idx]
-     (if found
-       found
-       (let [rec (get-map-idx @*current-map* idx)]
-         (when (kind rec) idx))))
-   nil
-   (rect->idxs @*current-map* (hit-rect rect dir))))
+  (let [center (rect-center rect)
+        test-point (vec-add center (dir-offset dir))
+        idx (coords->idx @*current-map* test-point)
+        rec (get-map-idx @*current-map* idx)]
+    (when (kind rec)
+      idx)))
 
 (defn breakable-underneath? [rect]
   (kind-towards? rect :below :breakable))
@@ -241,9 +216,15 @@
 
   Useable
   (use-thing [c user]
-    (when-let [idx (kind-towards? (to-rect user) (:direction @(:particle user)) fillable?)]
-      (set-map-idx @*current-map* idx (conj map-rec {:used true}))
-      true)))
+    (let [below-fillable-idx (kind-towards? (to-rect user) :below fillable?)]
+      (if (and below-fillable-idx (not (supported-by-map @*current-map* (to-rect user))))
+        ;; put the brick below
+        (set-map-idx @*current-map* below-fillable-idx (conj map-rec {:used true}))
+
+        ;; otherwise, try the direction we're facing
+        (when-let [idx (kind-towards? (to-rect user) (:direction @(:particle user)) fillable?)]
+          (set-map-idx @*current-map* idx (conj map-rec {:used true}))
+          true)))))
 
 (defrecord Fist [rec state]
   Iconic
@@ -375,8 +356,8 @@
 
            :rubble
            {:image (resize-nearest-neighbor pdata [48 32 16 16] dims)
-            :dims [0.8 0.8]
-            :spawn (fn [pos rec map-rec] (Rubble. pos rec map-rec (atom {:cooldown 0.5})))}
+            :dims [1 1]
+            :spawn (fn [pos rec map-rec] (Rubble. pos rec map-rec (atom {:cooldown 0.2})))}
            })
     
     (let [fist-rec {:image (resize-nearest-neighbor pdata [48 16 16 16] dims)
@@ -417,7 +398,7 @@
   showoff.showoff.Rectable
   (to-rect [player]
     (let [[x y] (:position @particle)]
-      [(+ x 0.2) (+ y 0.1) 0.6 0.9]))
+      [(+ x 0.1) (+ y 0.1) 0.8 0.9]))
 
   showoff.showoff.Tickable
   (tick [player]
@@ -517,7 +498,13 @@
                                               [0 2]))
                             +viewport-max-displacement+
                             +viewport-spring-constant+))
-      (drag-force-generator +viewport-drag-coefficient+)]})))
+      (drag-force-generator +viewport-drag-coefficient+)
+
+      ;; bring to rest if we're not moving very fast
+      (fn [p]
+        (let [spd (vec-mag (:velocity p))
+              drag-dir (vec-negate (vec-unit (:velocity p)))]
+          (vec-scale drag-dir (* spd 0.3))))]})))
 
 (def *game-running* false)
 
