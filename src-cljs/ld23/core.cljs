@@ -376,11 +376,14 @@
       (with-img (str "graphics/sprites.png?" (Math/random))
         (fn [sprites]
           (setup-symbols sprites)
-          (with-img (str "graphics/world2.gif?" (Math/random))
-            (fn [map-img]
-              (reset! *current-map* (load-map map-img *symbols*))
-              (callback))))))))
+          (callback))))))
 
+(defn with-loaded-map [callback]
+  (with-img (str "graphics/world2.gif?" (Math/random))
+    (fn [map-img]
+      (reset! *current-map* (load-map map-img *symbols*))
+      (reset-tick-clock)
+      (callback))))
 
 (def ^:dynamic *command-state-override* nil)
 
@@ -592,14 +595,17 @@
 
 (def *instruction-time* (atom nil))
 
-(defn instructions-setup [callback]
+(defn once-only-setup [callback]
   (with-prepared-assets
     (fn []
       (with-dialog-assets
         (fn []
-          (reset! *instruction-time* 5)
-          (reset-tick-clock)
           (callback))))))
+
+(defn prepare-instructions [callback]
+  (reset! *instruction-time* 5)
+  (reset-tick-clock)
+  (callback))
 
 (defn instructions-screen [ticks]
   (let [ctx (context)]
@@ -617,14 +623,22 @@
             (- @*instruction-time*
                (* ticks showoff.showoff.+secs-per-tick+)))
     (if (> @*instruction-time* 0)
-      :start
-      :game)))
+      :instructions
+      :setup-map)))
 
 (def *game-states*
   {:start
-   {:setup instructions-setup
+   {:setup once-only-setup
+    :after-ticks (fn [] :instructions)}
+
+   :instructions
+   {:setup prepare-instructions
     :after-ticks instructions-screen}
 
+   :setup-map
+   {:setup with-loaded-map
+    :after-ticks (fn [] :game)}
+   
    :game
    {:setup setup-world
     :after-ticks draw-world}
@@ -636,7 +650,7 @@
                                      (* @*bricks-destroyed* 1000)
                                      @*keys-collected*))
                    (clear-entities)
-                   :start)}
+                   :instructions)}
    
    })
 
