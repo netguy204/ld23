@@ -231,10 +231,13 @@
   Useable
   (use-thing [c] nil))
 
+(defn timer-time [timer]
+  (or (:time @(:state timer)) (:start timer)))
+
 (defrecord Timer [start state]
   showoff.showoff.Tickable
   (tick [c]
-    (let [last-time (or (:time @state) start)]
+    (let [last-time (timer-time c)]
       (swap! state conj {:time (- last-time showoff.showoff.+secs-per-tick+)})
       (when (<= last-time 0)
         (swap! state conj {:time 0})))))
@@ -382,7 +385,6 @@
   (with-img (str "graphics/world2.gif?" (Math/random))
     (fn [map-img]
       (reset! *current-map* (load-map map-img *symbols*))
-      (reset-tick-clock)
       (callback))))
 
 (def ^:dynamic *command-state-override* nil)
@@ -451,11 +453,14 @@
                                             0.0))) ;; restitution
   )
 
-(defn draw-player [ctx p]
-  (let [particle (:particle p)
-        sprite-key (or (:direction @particle) :right)
-        sprite (sprite-key *player-sprite*)]
-    (draw-sprite ctx sprite (:position @particle))))
+(defn draw-player [ctx position direction]
+  (let [sprite (direction *player-sprite*)]
+    (draw-sprite ctx sprite position)))
+
+(defn draw-player-entity [ctx p]
+  (let [particle @(:particle p)
+        direction (or (:direction particle) :right)]
+    (draw-player ctx (:position particle) direction)))
 
 ;;; the particle provides keyboard interaction, jumping, etc
 (def *player-speed* 40)
@@ -535,6 +540,7 @@
   
   (set! *game-timer* (Timer. 15 (atom {})))
   (add-entity @*current-map* *game-timer*)
+  (reset-tick-clock)
   
   (callback))
 
@@ -564,7 +570,7 @@
       (.drawImage ctx *backdrop* (- (* vx 9)) (- (* vy 9)))
       (draw-map @*current-map*)
       (draw-entities)
-      (draw-player ctx *player*)
+      (draw-player-entity ctx *player*)
       
       ;; draw the hud
       (let [[w h] (img-dims *hud*)]
@@ -577,7 +583,7 @@
       (draw-timer ctx *game-timer*)))
   
   ;; next state
-  (if (= (Math/ceil (:time @(:state *game-timer*))) 0)
+  (if (= (timer-time *game-timer*) 0)
     :show-score
     :game))
 
@@ -609,9 +615,8 @@
 
 (defn instructions-screen [ticks]
   (let [ctx (context)]
-    ;; black background
-    (fill-style ctx (color [0 0 0]))
-    (.fillRect ctx 0 0 640 480)
+    ;; just the backdrop
+    (.drawImage ctx *backdrop* 0 0)
 
     ;; dialog
     (.drawImage ctx *base-dialog* 0 0)
@@ -619,9 +624,12 @@
     ;; instructions icons
     (.drawImage ctx *instructions* 0 0)
 
+    ;; left/right character
+    
     (reset! *instruction-time*
             (- @*instruction-time*
                (* ticks showoff.showoff.+secs-per-tick+)))
+    
     (if (> @*instruction-time* 0)
       :instructions
       :setup-map)))
