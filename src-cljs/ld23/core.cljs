@@ -34,15 +34,17 @@
 (def *symbols* nil)
 
 (def *hud-font* nil)
-(def *font-chars* "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"?!./:")
+(def *font-chars* "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"?!./:$")
 
 (def *backdrop* (get-img (str "graphics/backdrop.png?" (Math/random))))
 (def *player-sprite* nil)
+(def *money-icon* nil)
 (def *hud* nil)
 (def *collectables* nil)
 (def *bag* (atom []))
 (def *media-player* nil)
 (def *keys-collected* (atom 0))
+(def *total-keys* (atom 0))
 (def *bricks-destroyed* (atom 0))
 
 (defn play-sound [key]
@@ -338,6 +340,8 @@
           {:left (resize-nearest-neighbor pdata [0 0 16 16] dims)
            :right (resize-nearest-neighbor pdata [16 0 16 16] dims)})
 
+    (set! *money-icon* (resize-nearest-neighbor pdata [64 0 16 16] dims))
+    
     (set! *collectables*
           {:key
            {:image (resize-nearest-neighbor pdata [32 0 16 16] dims)
@@ -477,6 +481,11 @@
 
 (def *viewport* nil)
 
+(defn add-keys [locations]
+  (doseq [loc locations]
+    (add-collectable :key loc))
+  (reset! *total-keys* (count locations)))
+
 (defn setup-world [callback]
   (empty-bag)
   (clear-entities)
@@ -531,14 +540,13 @@
   
   (add-collectable :jackhammer [9 5] 0.3)
   (add-collectable :blowtorch [5 22] 0.3)
-  (doseq [p [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49]]]
-    (add-collectable :key p))
+  (add-keys [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49]])
 
   (add-entity @*current-map* *viewport*)
   (add-entity @*current-map* *player*)
   (add-entity @*current-map* (Bag. *bag*))
   
-  (set! *game-timer* (Timer. (* 60 3) (atom {})))
+  (set! *game-timer* (Timer. (* 3) (atom {})))
   (add-entity @*current-map* *game-timer*)
   (reset-tick-clock)
   
@@ -573,8 +581,14 @@
       (draw-player-entity ctx *player*)
       
       ;; draw the hud
-      (let [[w h] (img-dims *hud*)]
-        (.drawImage ctx *hud* 0 0 w h 0 0 640 480))
+      (let [[w h] (img-dims *hud*)
+            key-img (:image (:key *collectables*))]
+        (.drawImage ctx *hud* 0 0 w h 0 0 640 480)
+        (.drawImage ctx key-img (* 2 73) (* 2 218))
+        (draw-text ctx *hud-font* (str @*keys-collected*) [180 444])
+
+        (.drawImage ctx *money-icon* (* 2 114) (* 2 218))
+        (draw-text ctx *hud-font* (str "$" (* 1000 @*bricks-destroyed*)) [268 444]))
       
       ;; draw whatever is in the front of the bag
       (let [item (first @*bag*)]
@@ -667,6 +681,30 @@
       :setup-map
       :instructions)))
 
+(def *scorescreen-cooldown* (atom {}))
+
+(defn prepare-scorescreen [callback]
+  (cooldown-start *scorescreen-cooldown*)
+  (callback))
+
+(defn scorescreen [ticks]
+  ;; don't clear, leave whatever used to be on the screen
+  (let [ctx (context)
+        key-img (:image (:key *collectables*))]
+    (.drawImage ctx *base-dialog* 0 0)
+    (draw-text-centered ctx *hud-font* "Time is Up!" [320 100])
+    (.drawImage ctx key-img 216 150)
+    (draw-text ctx *hud-font* (format "%d of %d" @*keys-collected* @*total-keys*) [264 158])
+    (.drawImage ctx *money-icon* 216 182)
+    (draw-text ctx *hud-font* (format "$%d" (* 1000 @*bricks-destroyed*)) [264 190])
+    (draw-text ctx *hud-font* "of damage done" [264 222])
+
+    (draw-text ctx *hud-font* "Press a Key" [264 286]))
+
+  (if (and (is-cool? *scorescreen-cooldown*) (any-keys-pressed?))
+    :setup-map
+    :show-score))
+
 (def *game-states*
   {:start
    {:setup once-only-setup
@@ -685,13 +723,8 @@
     :after-ticks draw-world}
 
    :show-score
-   {:after-ticks (fn []
-                   (set! *game-running* false)
-                   (js/alert (format "You caused $%d worth of damage and found %d keys!"
-                                     (* @*bricks-destroyed* 1000)
-                                     @*keys-collected*))
-                   (clear-entities)
-                   :instructions)}
+   {:setup prepare-scorescreen
+    :after-ticks scorescreen}
    
    })
 
