@@ -575,7 +575,7 @@
       (fn []
         (setup-world)
         (prepare-sound)
-        (until-false game-loop)))))
+        (until-false game-loop 0)))))
 
 
 (defn ^:export map-viewer []
