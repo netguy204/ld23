@@ -40,6 +40,8 @@
 (def *collectables* nil)
 (def *bag* (atom []))
 (def *media-player* nil)
+(def *keys-collected* (atom 0))
+(def *bricks-destroyed* (atom 0))
 
 (defn play-sound [key]
   (.play *media-player* (name key)))
@@ -68,6 +70,7 @@
 (defn cooldown-start [obj max-cooldown]
   (swap! obj conj {:cooldown max-cooldown}))
 
+
 (defrecord StaticCollectable [position rec]
   showoff.showoff.Rectable
   (to-rect [c] (posrec->rect position rec))
@@ -77,6 +80,7 @@
 
   Collectable
   (collect [c]
+    (swap! *keys-collected* inc)
     (remove-entity @*current-map* c)))
 
 (def dir-offset {:left [-1 0]
@@ -133,6 +137,12 @@
 (defn remove-from-bag [item]
   (reset! *bag* (into [] (filter #(not (= item %)) @*bag*))))
 
+(defn take-brick [idx]
+  (let [rec (get-map-idx @*current-map* idx)]
+    (set-map-idx @*current-map* idx {:kind :skip})
+    (when (not (:used rec)) (swap! *bricks-destroyed* inc))
+    rec))
+
 (defrecord Jackhammer [position rec max-cooldown state]
   showoff.showoff.Rectable
   (to-rect [c] (posrec->rect position rec))
@@ -155,15 +165,32 @@
   (use-thing [c user]
     (when (is-cool? state)
       (if-let [idx (breakable-underneath? (to-rect user))]
-        (let [map-rec (get-map-idx @*current-map* idx)]
-          (set-map-idx @*current-map* idx {:kind :skip})
-          (add-entity @*current-map* (add-collectable :rubble (idx->coords @*current-map* idx) map-rec))
-          (cooldown-start state max-cooldown))))))
+        (add-entity @*current-map* (add-collectable :rubble (idx->coords @*current-map* idx) (take-brick idx)))
+        (cooldown-start state max-cooldown)))))
 
 (defn fillable? [rec]
   (let [player-idx (coords->idx @*current-map* (rect-center (to-rect *player*)))
         rec-idx (coords->idx @*current-map* (:coords rec))]
     (and (= (:kind rec) :skip) (not (= player-idx rec-idx)))))
+
+(defrecord ConsumableStack [kind rec contents]
+  showoff.showoff.Tickable
+  (tick [c] (doseq [item @contents]
+              (tick item)))
+
+  Iconic
+  (icon [c] (:image rec))
+
+  Useable
+  (use-thing [c user]
+    (let [item (first @contents)]
+      (use-thing item user))
+    (swap! contents rest)))
+
+(defn add-with-stacking [item kind rec]
+  (if-let [stack (first (filter #(= (:kind %) kind) @*bag*))]
+    (swap! (:contents stack) conj item)
+    (swap! *bag* conj (ConsumableStack. kind rec (atom [item])))))
 
 (defrecord Rubble [position rec map-rec state]
   showoff.showoff.Rectable
@@ -182,13 +209,12 @@
   (collect [c]
     (when (is-cool? state)
       (remove-entity @*current-map* c)
-      (swap! *bag* conj c)))
+      (add-with-stacking c :rubble rec)))
 
   Useable
   (use-thing [c user]
     (when-let [idx (kind-towards? (to-rect user) (:direction @(:particle user)) fillable?)]
-      (set-map-idx @*current-map* idx map-rec)
-      (remove-from-bag c))))
+      (set-map-idx @*current-map* idx (conj map-rec {:used true})))))
 
 (defrecord Fist [rec state]
   Iconic
@@ -467,7 +493,14 @@
   (doseq [p [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49]]]
     (add-collectable :key p))
 
-  (set! *game-timer* (Timer. 360 (atom {}) (fn [] (set! *game-running* false))))
+  (set! *game-timer*
+        (Timer. 180 (atom {})
+                (fn []
+                  (set! *game-running* false)
+                  (js/alert (format "You caused %d worth of damage and found %d keys!"
+                                    (* @*bricks-destroyed* 1000)
+                                    @*keys-collected*)))))
+  
   (add-entity @*current-map* *game-timer*)
   (set! *game-running* true))
 
