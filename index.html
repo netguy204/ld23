@@ -4,29 +4,51 @@
     <script src="jukebox/src/Manager.js"></script>
 
     <script src="javascripts/compiled.js"></script>
+
+    <style type="text/css" media="screen">
+      html {
+          margin:0;
+          padding:0;
+          background: #9c9985;
+          color:#000;
+      }
+
+      #wrap {
+          width: 640px;
+          margin: 0 auto;
+          border-style: solid;
+          border-color: #c46d3b;
+          border-width: 6px;
+          padding: 16px;
+          background:#e3cbac;
+      }
+
+      #story {
+          text-align: center;
+          font-family: “Helvetica Neue”, Arial, Helvetica, sans-serif;
+          font-size: 16px;
+          margin: 16px;
+      }
+    </style>
   </head>
 
   <body>
-    <div id="content">
-    </div>
-    <div>
-      Controls:
-      <ul>
-        <li>Left/Right - move left and right</li>
-        <li>Up - jump</li>
-        <li>Down - Cycle through items in your bag</li>
-        <li>Space - Use the currently selected item</li>
-      </ul>
-
-      You're the little creature responsible for all the missing keys
-      and misplaced remote-controls in the world. <i>Steal and mess up as
-      much as you can before the timer runs out.</i>
+      <div id="wrap">
+        <div id="content"></div>
+        
+        <div id="story">
+          You're the little creature responsible for all the missing
+          keys and misplaced remote-controls in the world. <i>Steal
+          and mess up as much as you can before the timer runs
+          out.</i>
+          
+          <br/><br/>
+          
+          Go forth and be mischievous!
+        </div>
       
-      <br/><br/>
-
-      Go forth and be mischievous!
-    </div>
-
+      </div>
+    
     <script language="javascript">
       ld23.core.game();
     </script>
