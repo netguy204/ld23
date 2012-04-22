@@ -358,9 +358,8 @@
 
     (set! *collectables*
           {:key
-           {:image (resize-nearest-neighbor pdata [32 0 16 24] [(nth dims 0)
-                                                                  (* 1.5 (nth dims 1))])
-            :dims [1 1.5]
+           {:image (resize-nearest-neighbor pdata [32 0 16 16] dims)
+            :dims [1 1]
             :spawn (fn [pos rec] (StaticCollectable. pos rec))
             }
            
@@ -485,7 +484,7 @@
      :force-generators
      [(drag-force-generator 1.0)
       (ground-friction-generator *current-map* #(to-rect *player*) 30)
-      (gravity-force-generator 16)
+      (gravity-force-generator 20)
       (keyboard-velocity-generator
        (.-LEFT gevents/KeyCodes) [(- *player-speed*) 0])
       (keyboard-velocity-generator
@@ -505,7 +504,7 @@
 
 (def *viewport*
   (Viewport.
-   [16 10]
+   [20 15]
    (atom
     {:mass 1
      :position [5 5]
@@ -571,7 +570,7 @@
 
     ;; draw whatever is in the front of the bag
     (let [item (first @*bag*)]
-      (.drawImage ctx (icon item) 593 430))
+      (.drawImage ctx (icon item) 594 435))
 
     (draw-timer ctx *game-timer*)
     ))
@@ -586,7 +585,7 @@
         canvas (make-canvas screen-size)]
     
     (dom/appendChild (content) canvas)
-    (set-display-and-viewport canvas [640 432] #(to-rect *viewport*))
+    (set-display-and-viewport canvas [640 480] #(to-rect *viewport*))
     (prepare-input)
     (add-entity @*current-map* *viewport*)
     (add-entity @*current-map* *player*)
