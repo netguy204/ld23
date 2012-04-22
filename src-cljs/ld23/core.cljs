@@ -538,7 +538,7 @@
   (add-entity @*current-map* *player*)
   (add-entity @*current-map* (Bag. *bag*))
   
-  (set! *game-timer* (Timer. 15 (atom {})))
+  (set! *game-timer* (Timer. (* 60 3) (atom {})))
   (add-entity @*current-map* *game-timer*)
   (reset-tick-clock)
   
@@ -608,10 +608,16 @@
         (fn []
           (callback))))))
 
+(def +total-instruction-time+ 30)
+
 (defn prepare-instructions [callback]
-  (reset! *instruction-time* 5)
+  (reset! *instruction-time* +total-instruction-time+)
+  (set-display-and-viewport *canvas* [640 480] #(vector 0 0 20 15))
   (reset-tick-clock)
   (callback))
+
+(defn any-keys-pressed? []
+  (not (empty? (input-state))))
 
 (defn instructions-screen [ticks]
   (let [ctx (context)]
@@ -624,15 +630,42 @@
     ;; instructions icons
     (.drawImage ctx *instructions* 0 0)
 
-    ;; left/right character
+    (let [factor (/ @*instruction-time* +total-instruction-time+)
+          v (* 2 Math/PI 3 factor)
+          xoff (Math/sin v)
+          hopv (- (/ (mod factor 0.03) 0.03) 0.5)
+          yoff (- (* hopv hopv 2))
+          dir (if (< (Math/cos v) 0)
+                :right
+                :left)]
+      ;; left/right character
+      (draw-player ctx [(+ 9 xoff) 1.5] dir)
+
+      ;; up/down character
+      (draw-player ctx [15 (- 1.1 yoff)] :right)
+
+      
+      (let [item-number (Math/floor (* (/ (mod factor 0.1) 0.1) 3))
+            item-key ([:jackhammer :blowtorch :rubble] item-number)
+            item-img (:image (*collectables* item-key))]
+
+        ;; the icon in the bar
+        (.drawImage ctx item-img (* 2 99) (* 2 79))
+
+        ;; the player holding the icon
+        (.drawImage ctx item-img (* 2 238) (* 2 80))
+        (draw-player ctx [15.5 5] :left)
+
+        ))
     
     (reset! *instruction-time*
             (- @*instruction-time*
                (* ticks showoff.showoff.+secs-per-tick+)))
     
-    (if (> @*instruction-time* 0)
-      :instructions
-      :setup-map)))
+    (if (or (<= @*instruction-time* 0)
+            (any-keys-pressed?))
+      :setup-map
+      :instructions)))
 
 (def *game-states*
   {:start
