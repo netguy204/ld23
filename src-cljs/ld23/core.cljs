@@ -216,15 +216,13 @@
 
   Useable
   (use-thing [c user]
-    (let [below-fillable-idx (kind-towards? (to-rect user) :below fillable?)]
-      (if (and below-fillable-idx (not (supported-by-map @*current-map* (to-rect user))))
-        ;; put the brick below
-        (set-map-idx @*current-map* below-fillable-idx (conj map-rec {:used true}))
+    (if-let [below-fillable-idx (kind-towards? (to-rect user) :below fillable?)]
+      ;; if we can fill below, do that
+      (set-map-idx @*current-map* below-fillable-idx (conj map-rec {:used true}))
 
-        ;; otherwise, try the direction we're facing
-        (when-let [idx (kind-towards? (to-rect user) (:direction @(:particle user)) fillable?)]
-          (set-map-idx @*current-map* idx (conj map-rec {:used true}))
-          true)))))
+      ;; otherwise, try the direction we're facing
+      (when-let [idx (kind-towards? (to-rect user) (:direction @(:particle user)) fillable?)]
+        (set-map-idx @*current-map* idx (conj map-rec {:used true}))))))
 
 (defrecord Fist [rec state]
   Iconic
@@ -247,7 +245,7 @@
   (let [time (Math/ceil (:time @(:state timer)))
         minutes (Math/floor (/ time 60))
         seconds (mod time 60)]
-    (draw-text-centered ctx *hud-font* (format "%2d:%02d" minutes seconds) [330 455])))
+    (draw-text-centered ctx *hud-font* (format "%2d:%02d" minutes seconds) [55 452])))
 
 (defn fill-template [pdata [px py] sym]
   (let [[dw dh] showoff.showoff.*tile-in-world-dims*
@@ -557,7 +555,7 @@
 
     ;; draw whatever is in the front of the bag
     (let [item (first @*bag*)]
-      (.drawImage ctx (icon item) 594 435))
+      (.drawImage ctx (icon item) 592 436))
 
     (draw-timer ctx *game-timer*)
     ))
