@@ -174,10 +174,6 @@
     (and (= (:kind rec) :skip) (not (= player-idx rec-idx)))))
 
 (defrecord ConsumableStack [kind rec contents]
-  showoff.showoff.Tickable
-  (tick [c] (doseq [item @contents]
-              (tick item)))
-
   Iconic
   (icon [c] (:image rec))
 
