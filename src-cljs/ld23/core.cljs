@@ -36,7 +36,7 @@
 (def *hud-font* nil)
 (def *font-chars* "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"?!./:$")
 
-(def *backdrop* (get-img (str "graphics/backdrop.png?" (Math/random))))
+(def *backdrop* (get-img (str "graphics/backdrop.png")))
 (def *player-sprite* nil)
 (def *money-icon* nil)
 (def *hud* nil)
@@ -376,17 +376,17 @@
     (fn [font]
       (set! *hud-font* font)))
 
-  (with-img (str "graphics/hud.png?" (Math/random))
+  (with-img (str "graphics/hud.png")
     (fn [hud]
       (set! *hud* (resize-nearest-neighbor (get-pixel-data hud) [640 480]))
       
-      (with-img (str "graphics/sprites.png?" (Math/random))
+      (with-img (str "graphics/sprites.png")
         (fn [sprites]
           (setup-symbols sprites)
           (callback))))))
 
 (defn with-loaded-map [callback]
-  (with-img (str "graphics/world2.gif?" (Math/random))
+  (with-img (str "graphics/world2.gif")
     (fn [map-img]
       (reset! *current-map* (load-map map-img *symbols*))
       (callback))))
@@ -489,6 +489,9 @@
 (defn setup-world [callback]
   (empty-bag)
   (clear-entities)
+  (reset! *keys-collected* 0)
+  (reset! *bricks-destroyed* 0)
+  
   (swap! *bag* conj (Fist. (:fist *collectables*) (atom {})))
 
   (set!
@@ -540,13 +543,13 @@
   
   (add-collectable :jackhammer [9 5] 0.3)
   (add-collectable :blowtorch [5 22] 0.3)
-  (add-keys [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49]])
+  (add-keys [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49] [22 29]])
 
   (add-entity @*current-map* *viewport*)
   (add-entity @*current-map* *player*)
   (add-entity @*current-map* (Bag. *bag*))
   
-  (set! *game-timer* (Timer. (* 3) (atom {})))
+  (set! *game-timer* (Timer. (* 4 60) (atom {})))
   (add-entity @*current-map* *game-timer*)
   (reset-tick-clock)
   
@@ -575,7 +578,7 @@
     (clear)
     (let [ctx (context)
           [vx vy _ _] (viewport-rect)]
-      (.drawImage ctx *backdrop* (- (* vx 9)) (- (* vy 9)))
+      (.drawImage ctx *backdrop* (- 0 50 (* 13 vx)) (- 0 10 (* 13 vy)))
       (draw-map @*current-map*)
       (draw-entities)
       (draw-player-entity ctx *player*)
@@ -635,15 +638,6 @@
 
 (defn instructions-screen [ticks]
   (let [ctx (context)]
-    ;; just the backdrop
-    (.drawImage ctx *backdrop* 0 0)
-
-    ;; dialog
-    (.drawImage ctx *base-dialog* 0 0)
-
-    ;; instructions icons
-    (.drawImage ctx *instructions* 0 0)
-
     (let [factor (/ @*instruction-time* +total-instruction-time+)
           v (* 2 Math/PI 3 factor)
           xoff (Math/sin v)
@@ -652,6 +646,15 @@
           dir (if (< (Math/cos v) 0)
                 :right
                 :left)]
+      ;; just the backdrop
+      (.drawImage ctx *backdrop* (- (* factor 600)) 0)
+      
+      ;; dialog
+      (.drawImage ctx *base-dialog* 0 0)
+      
+      ;; instructions icons
+      (.drawImage ctx *instructions* 0 0)
+
       ;; left/right character
       (draw-player ctx [(+ 9 xoff) 1.5] dir)
 
@@ -668,7 +671,7 @@
 
         ;; the player holding the icon
         (.drawImage ctx item-img (* 2 238) (* 2 80))
-        (draw-player ctx [15.5 5] :left)
+        (draw-player ctx [16 5] :left)
 
         ))
     
@@ -684,7 +687,7 @@
 (def *scorescreen-cooldown* (atom {}))
 
 (defn prepare-scorescreen [callback]
-  (cooldown-start *scorescreen-cooldown*)
+  (cooldown-start *scorescreen-cooldown* 1)
   (callback))
 
 (defn scorescreen [ticks]
@@ -752,6 +755,9 @@
 
 
 (defn game-loop []
+  ;; give the sound system a chance to run
+  (.loop jukebox.Manager)
+  
   (if (= @*current-game-state* nil)
     ;; set the state to start
     (with-changed-game-state :start
@@ -774,6 +780,8 @@
     (set-display-and-viewport *canvas* [640 480] #(vector 0 0 20 15))
     
     (prepare-input)
+    (prepare-sound)
+    
     (game-loop)))
 
 
