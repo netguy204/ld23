@@ -6,6 +6,7 @@
                                 vec-mag vec-negate reset-tick-clock
                                 rect-center viewport-rect clear display
                                 tick-entities tick to-rect draw rect-intersect
+                                rect-offset
                                 drag-force-generator gravity-force-generator
                                 integrate-particle spring-force
                                 apply-particle-vs-map load-map draw-map
@@ -20,7 +21,7 @@
         (showoff.core :only [content clj->js Viewport prepare-input
                              keyboard-velocity-generator until-false
                              jump-velocity-generator ground-friction-generator
-                             request-animation]))
+                             request-animation by-id]))
   (:require (goog.dom :as dom)
             (goog.string :as string)
             (goog.events :as gevents)
@@ -46,6 +47,7 @@
 (def *keys-collected* (atom 0))
 (def *total-keys* (atom 0))
 (def *bricks-destroyed* (atom 0))
+(def *debug-mode* true)
 
 (defn play-sound [key]
   (.play *media-player* (name key)))
@@ -85,6 +87,7 @@
   Collectable
   (collect [c]
     (swap! *keys-collected* inc)
+    (play-sound :powerup)
     (remove-entity @*current-map* c)))
 
 (def dir-offset {:left [-1 0]
@@ -405,11 +408,91 @@
 (defn collectable? [o]
   (satisfies? Collectable o))
 
+(defn particle-position [a]
+  (@a :position))
+
+(defn particle-velocity [a]
+  (@a :velocity))
+
+(def +max-speed+ 10)
+(def +player-accel+ 0.5)
+(def +friction+ (/ +max-speed+ (+ +max-speed+ +player-accel+)))
+(def +min-speed+ (* +player-accel+ +friction+))
+(def +jump-speed+ 12)
+(def +gravity+ 1)
+(def +max-fall+ 12)
+
+(defn move-check-map-collision [map [dx dy] rect on-x-collide on-y-collide]
+  (let [x-moved-rect (rect-offset rect [dx 0])
+        x-offset (if-let [hit-idx (first (map-collisions map x-moved-rect))]
+                   (do (on-x-collide hit-idx) 0)
+                   dx)
+
+        y-moved-rect (rect-offset rect [x-offset dy])
+        y-offset (if-let [hit-idx (first (map-collisions map y-moved-rect))]
+                   (do (on-y-collide hit-idx) 0)
+                   dy)]
+    
+    [x-offset y-offset]))
+
+(defn player-movement [player particle]
+  ;; motion and collision detection
+  (when ((input-state) (.-RIGHT gevents/KeyCodes))
+    (swap! particle conj {:velocity (vec-add (particle-velocity particle)
+                                             [+player-accel+ 0])}))
+  
+  (when ((input-state) (.-LEFT gevents/KeyCodes))
+    (swap! particle conj {:velocity (vec-add (particle-velocity particle)
+                                             [(- +player-accel+) 0])}))
+  (if (supported-by-map @*current-map* (to-rect player))
+    ;; on the ground, check for jump
+    (when ((input-state) (.-UP gevents/KeyCodes))
+      (swap! particle conj {:velocity (vec-add (particle-velocity particle)
+                                               [0 (- +jump-speed+)])}))
+    
+    ;; in the air, apply gravity
+    (let [[xvel yvel] (particle-velocity particle)
+          yvel (min +max-fall+ (+ yvel +gravity+))]
+      (swap! particle conj {:velocity [xvel yvel]})))
+  
+  ;; apply friction (only horizontally) and stop sliding
+  (let [[xvel yvel] (particle-velocity particle)
+        xvel (* +friction+ xvel)
+        xvel (if (< (Math/abs xvel) +min-speed+)
+               0
+               xvel)]
+    (swap! particle conj {:velocity [xvel yvel]}))
+  
+
+  ;; velocity integration and collision detection
+  (swap!
+   particle conj
+   {
+    :position
+    (vec-add
+     (particle-position particle)
+     (move-check-map-collision
+      @*current-map*
+      (vec-scale (particle-velocity particle)
+                 showoff.showoff.+secs-per-tick+)
+      (to-rect player)
+      ;; on-x-collide
+      (fn [idx]
+        (let [[vx vy] (particle-velocity particle)]
+          (swap! particle conj {:velocity [0 vy]})
+          true))
+      
+      ;; on-y-collide
+      (fn [idx]
+        (let [[vx vy] (particle-velocity particle)]
+          (swap! particle conj {:velocity [vx 0]})
+          true))))}))
+
 (defrecord Player [particle]
   showoff.showoff.Rectable
   (to-rect [player]
     (let [[x y] (:position @particle)]
-      [(+ x 0.1) (+ y 0.1) 0.8 0.9]))
+      [(+ x 0.1) (+ y 0.2) 0.8 0.8]))
 
   showoff.showoff.Tickable
   (tick [player]
@@ -446,15 +529,11 @@
             collectables (filter collectable? @objects)]
         (doseq [collectable collectables]
           (when (rect-intersect (to-rect collectable) (to-rect player))
-            (collect collectable)
-            ;;(play-sound :powerup)
-            ))))
+            (collect collectable)))))
+
+    (player-movement player particle)
     
-    ;; motion and collision detection
-    (reset! particle (apply-particle-vs-map (integrate-particle @particle)
-                                            @*current-map*
-                                            (to-rect player)
-                                            0.0))) ;; restitution
+    )
   )
 
 (defn draw-player [ctx position direction]
@@ -467,7 +546,6 @@
     (draw-player ctx (:position particle) direction)))
 
 ;;; the particle provides keyboard interaction, jumping, etc
-(def *player-speed* 40)
 (def *player* nil)
 
 (defn add-collectable [key pos & more]
@@ -486,6 +564,8 @@
     (add-collectable :key loc))
   (reset! *total-keys* (count locations)))
 
+(def *player-speed* 6)
+
 (defn setup-world [callback]
   (empty-bag)
   (clear-entities)
@@ -502,17 +582,6 @@
       :position [5 5]
       :velocity [0 0]
     
-      ;; bring to a stop quickly
-      :force-generators
-      [(drag-force-generator 1.0)
-       (ground-friction-generator *current-map* #(to-rect *player*) 30)
-       (gravity-force-generator 20)
-       (keyboard-velocity-generator
-        (.-LEFT gevents/KeyCodes) [(- *player-speed*) 0])
-       (keyboard-velocity-generator
-        (.-RIGHT gevents/KeyCodes) [*player-speed* 0])
-       (jump-velocity-generator *current-map* #(to-rect *player*) 300 0.5)
-       ]
       })))
 
   (set!
@@ -558,7 +627,7 @@
 (defn prepare-sound []
   (let [sounds {:resources ["sounds/music2.ogg"
                             "sounds/music2.mp3"]
-                :autoplay "bg-music"
+                ;;:autoplay "bg-music"
                 :spritemap
                 {:bg-music
                  {:start 0.0
@@ -581,6 +650,10 @@
       (.drawImage ctx *backdrop* (- 0 50 (* 13 vx)) (- 0 10 (* 13 vy)))
       (draw-map @*current-map*)
       (draw-entities)
+
+      ;; draw the hitrect
+      ;;(filled-rect ctx (to-rect *player*) (color [255 0 255]))
+      
       (draw-player-entity ctx *player*)
       
       ;; draw the hud
@@ -598,6 +671,9 @@
         (.drawImage ctx (icon item) 592 436))
       
       (draw-timer ctx *game-timer*)))
+
+  (when *debug-mode*
+   (set! (.-innerHTML (by-id "console")) (pr-str (input-state))))
   
   ;; next state
   (if (= (timer-time *game-timer*) 0)
@@ -703,7 +779,9 @@
     (draw-text ctx *hud-font* "of damage done" [264 222])
 
     (draw-text ctx *hud-font* "Press a Key" [264 286]))
-
+  
+  (cooldown-tick *scorescreen-cooldown*)
+  
   (if (and (is-cool? *scorescreen-cooldown*) (any-keys-pressed?))
     :setup-map
     :show-score))
