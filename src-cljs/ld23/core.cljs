@@ -470,6 +470,7 @@
 
 (defn player-movement [player particle]
   ;; motion and collision detection
+  (cooldown-tick particle :jump-timer)
   (when ((input-state) (.-RIGHT gevents/KeyCodes))
     (swap! particle conj {:velocity (vec-add (particle-velocity particle)
                                              [+player-accel+ 0])}))
@@ -479,7 +480,8 @@
                                              [(- +player-accel+) 0])}))
   (if (supported-by-map @*current-map* (to-rect player))
     ;; on the ground, check for jump
-    (when ((input-state) (.-UP gevents/KeyCodes))
+    (when (and (is-cool? particle :jump-timer) ((input-state) (.-UP gevents/KeyCodes)))
+      (cooldown-start particle 0.2 :jump-timer)
       (play-sound :jump)
       (swap! particle conj {:velocity [(nth (particle-velocity particle) 0)
                                        (- +jump-speed+)]}))
@@ -536,7 +538,7 @@
   showoff.showoff.Rectable
   (to-rect [player]
     (let [[x y] (:position @particle)]
-      [(+ x 0.1) (+ y 0.2) 0.8 0.8]))
+      [(+ x 0.1) (+ y 0.3) 0.8 0.7]))
 
   showoff.showoff.Tickable
   (tick [player]
