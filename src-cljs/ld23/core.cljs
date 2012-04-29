@@ -61,19 +61,29 @@
   (icon [obj]))
 
 (defn posrec->rect [position rec]
-  (let [[px py] position
-        [w h] (:dims rec)]
+  (let [[w h] (:dims rec)
+        [px py] (vec-add position [(* 0.5 (- 1 w))
+                                   (* 0.5 (- 1 h))])]
     [px py w h]))
 
-(defn cooldown-tick [obj]
-  (let [cooldown (or (:cooldown @obj) 0)]
-    (swap! obj conj {:cooldown (- cooldown showoff.showoff.+secs-per-tick+)})))
+(defn cooldown-tick
+  ([obj] (cooldown-tick obj :cooldown))
 
-(defn is-cool? [obj]
-  (<= (or (:cooldown @obj) 0) 0))
+  ([obj slot]
+     (let [cooldown (or (slot @obj) 0)]
+       (swap! obj conj {slot (- cooldown showoff.showoff.+secs-per-tick+)}))))
 
-(defn cooldown-start [obj max-cooldown]
-  (swap! obj conj {:cooldown max-cooldown}))
+(defn is-cool?
+  ([obj] (is-cool? obj :cooldown))
+
+  ([obj slot]
+     (<= (or (slot @obj) 0) 0)))
+
+(defn cooldown-start
+  ([obj max-cooldown] (cooldown-start obj max-cooldown :cooldown))
+
+  ([obj max-cooldown slot]
+     (swap! obj conj {slot max-cooldown})))
 
 
 (defrecord StaticCollectable [position rec]
@@ -222,24 +232,20 @@
     (swap! (:contents stack) conj item)
     (swap! *bag* conj (ConsumableStack. kind rec (atom [item])))))
 
-(defrecord Rubble [position rec map-rec state]
+(defrecord Rubble [position rec map-rec]
   showoff.showoff.Rectable
   (to-rect [c] (posrec->rect position rec))
 
   showoff.showoff.Drawable
   (draw [c ctx] (draw-sprite ctx (:image rec) position))
 
-  showoff.showoff.Tickable
-  (tick [c] (cooldown-tick state))
-
   Iconic
   (icon [c] (:image rec))
 
   Collectable
   (collect [c]
-    (when (is-cool? state)
-      (remove-entity @*current-map* c)
-      (add-with-stacking c :rubble rec)))
+    (remove-entity @*current-map* c)
+    (add-with-stacking c :rubble rec))
 
   Useable
   (use-thing [c user]
@@ -391,8 +397,8 @@
 
            :rubble
            {:image (resize-nearest-neighbor pdata [48 32 16 16] dims)
-            :dims [1 1]
-            :spawn (fn [pos rec map-rec] (Rubble. pos rec map-rec (atom {:cooldown 0.2})))}
+            :dims [0.7 0.8]
+            :spawn (fn [pos rec map-rec] (Rubble. pos rec map-rec))}
 
            ;; not really collectable... that would be weird.
            :fist
@@ -442,7 +448,7 @@
   (@a :velocity))
 
 (def +max-speed+ 10)
-(def +player-accel+ 0.5)
+(def +player-accel+ 2)
 (def +friction+ (/ +max-speed+ (+ +max-speed+ +player-accel+)))
 (def +min-speed+ (* +player-accel+ +friction+))
 (def +jump-speed+ 12)
@@ -475,8 +481,8 @@
     ;; on the ground, check for jump
     (when ((input-state) (.-UP gevents/KeyCodes))
       (play-sound :jump)
-      (swap! particle conj {:velocity (vec-add (particle-velocity particle)
-                                               [0 (- +jump-speed+)])}))
+      (swap! particle conj {:velocity [(nth (particle-velocity particle) 0)
+                                       (- +jump-speed+)]}))
     
     ;; in the air, apply gravity
     (let [[xvel yvel] (particle-velocity particle)
