@@ -47,7 +47,7 @@
 (def *keys-collected* (atom 0))
 (def *total-keys* (atom 0))
 (def *bricks-destroyed* (atom 0))
-(def *debug-mode* true)
+(def *debug-mode* false)
 
 (defn play-sound [key]
   (.play *media-player* (name key)))
@@ -134,23 +134,21 @@
   showoff.showoff.Drawable
   (draw [c ctx] (draw-sprite ctx (:image rec) position))
 
-  showoff.showoff.Tickable
-  (tick [c] (cooldown-tick state))
-
   Iconic
   (icon [c] (:image rec))
   
   Collectable
   (collect [c]
+    (play-sound :pickup-item)
     (remove-entity @*current-map* c)
     (add-to-bag c))
 
   Useable
   (use-thing [c user]
-    (when (is-cool? state)
-      (if-let [idx (breakable-underneath? (to-rect user))]
-        (add-entity @*current-map* (add-collectable :rubble (idx->coords @*current-map* idx) (take-brick idx)))
-        (cooldown-start state max-cooldown)))))
+    (if-let [idx (breakable-underneath? (to-rect user))]
+      (do
+        (play-sound :dig)
+        (add-entity @*current-map* (add-collectable :rubble (idx->coords @*current-map* idx) (take-brick idx)))))))
 
 (defrecord Blowtorch [position rec max-cooldown state]
   showoff.showoff.Rectable
@@ -159,23 +157,21 @@
   showoff.showoff.Drawable
   (draw [c ctx] (draw-sprite ctx (:image rec) position))
 
-  showoff.showoff.Tickable
-  (tick [c] (cooldown-tick state))
-
   Iconic
   (icon [c] (:image rec))
   
   Collectable
   (collect [c]
+    (play-sound :pickup-item)
     (remove-entity @*current-map* c)
     (add-to-bag c))
 
   Useable
   (use-thing [c user]
-    (when (is-cool? state)
-      (if-let [idx (kind-towards? (to-rect user) (:direction @(:particle user)) :breakable)]
-        (add-entity @*current-map* (add-collectable :rubble (idx->coords @*current-map* idx) (take-brick idx)))
-        (cooldown-start state max-cooldown)))))
+    (if-let [idx (kind-towards? (to-rect user) (:direction @(:particle user)) :breakable)]
+      (do
+        (play-sound :dig)
+        (add-entity @*current-map* (add-collectable :rubble (idx->coords @*current-map* idx) (take-brick idx)))))))
 
 (defn fillable? [rec]
   (let [player-idx (coords->idx @*current-map* (rect-center (to-rect *player*)))
@@ -341,7 +337,12 @@
 
     (set! *player-sprite*
           {:left (resize-nearest-neighbor pdata [0 0 16 16] dims)
-           :right (resize-nearest-neighbor pdata [16 0 16 16] dims)})
+           :right (resize-nearest-neighbor pdata [16 0 16 16] dims)
+           :right-walk1 (resize-nearest-neighbor pdata [0 64 16 16] dims)
+           :right-walk2 (resize-nearest-neighbor pdata [16 64 16 16] dims)
+           :left-walk1 (resize-nearest-neighbor pdata [32 64 16 16] dims)
+           :left-walk2 (resize-nearest-neighbor pdata [48 64 16 16] dims)}
+          )
 
     (set! *money-icon* (resize-nearest-neighbor pdata [64 0 16 16] dims))
     
@@ -447,6 +448,7 @@
   (if (supported-by-map @*current-map* (to-rect player))
     ;; on the ground, check for jump
     (when ((input-state) (.-UP gevents/KeyCodes))
+      (play-sound :jump)
       (swap! particle conj {:velocity (vec-add (particle-velocity particle)
                                                [0 (- +jump-speed+)])}))
     
@@ -488,6 +490,16 @@
           (swap! particle conj {:velocity [vx 0]})
           true))))}))
 
+(defn timer-value [mutable place]
+  (or (place @mutable) 0))
+
+(defn timer-tick [mutable place]
+  (let [last-value (timer-value mutable place)]
+    (swap! mutable conj {place (inc last-value)})))
+
+(defn timer-scaled [mutable place scale]
+  (Math/floor (/ (timer-value mutable place) scale)))
+
 (defrecord Player [particle]
   showoff.showoff.Rectable
   (to-rect [player]
@@ -497,6 +509,7 @@
   showoff.showoff.Tickable
   (tick [player]
     (cooldown-tick particle)
+    (timer-tick particle :walk-timer)
     
     ;; record the last directon of motion so we can draw our sprite
     ;; facing that way
@@ -506,6 +519,12 @@
 
      ((input-state) (.-RIGHT gevents/KeyCodes))
      (swap! particle conj {:direction :right}))
+
+    ;; mark ourselves walking or not-walking for animation
+    (if (or ((input-state) (.-LEFT gevents/KeyCodes))
+            ((input-state) (.-RIGHT gevents/KeyCodes)))
+      (swap! particle conj {:walking true})
+      (swap! particle conj {:walking false}))
 
     ;; reset cooldown if no command keys are down
     (when (not (or ((input-state) (.-DOWN gevents/KeyCodes))
@@ -531,19 +550,22 @@
           (when (rect-intersect (to-rect collectable) (to-rect player))
             (collect collectable)))))
 
-    (player-movement player particle)
-    
-    )
-  )
+    (player-movement player particle)))
 
-(defn draw-player [ctx position direction]
-  (let [sprite (direction *player-sprite*)]
-    (draw-sprite ctx sprite position)))
+(defn walk-frame [direction frame]
+  (let [frameset (if (= direction :left)
+                   [:left-walk1 :left :left-walk2 :left]
+                   [:right-walk1 :right :right-walk2 :right])]
+    (frameset (mod frame 4))))
 
 (defn draw-player-entity [ctx p]
   (let [particle @(:particle p)
-        direction (or (:direction particle) :right)]
-    (draw-player ctx (:position particle) direction)))
+        direction (or (:direction particle) :right)
+        sprite-key (if (:walking particle)
+                     (walk-frame direction (timer-scaled (:particle p) :walk-timer 4))
+                     direction)
+        sprite (*player-sprite* sprite-key)]
+    (draw-sprite ctx sprite (:position particle))))
 
 ;;; the particle provides keyboard interaction, jumping, etc
 (def *player* nil)
@@ -627,7 +649,7 @@
 (defn prepare-sound []
   (let [sounds {:resources ["sounds/music2.ogg"
                             "sounds/music2.mp3"]
-                ;;:autoplay "bg-music"
+                :autoplay "bg-music"
                 :spritemap
                 {:bg-music
                  {:start 0.0
@@ -635,7 +657,20 @@
                   :loop true}
                  :powerup
                  {:start 136
-                  :end 137}}}
+                  :end 137}
+                 :dig
+                 {:start 140
+                  :end 140.2}
+                 :jump
+                 {:start 144
+                  :end 144.2}
+                 :pickup-coin
+                 {:start 148
+                  :end 148.1}
+                 :pickup-item
+                 {:start 152
+                  :end 152.4}
+                 }}
         
         mgrconfig {"useGameLoop" true}]
     (set! jukebox.Manager (jukebox.Manager. (clj->js mgrconfig)))
@@ -732,10 +767,10 @@
       (.drawImage ctx *instructions* 0 0)
 
       ;; left/right character
-      (draw-player ctx [(+ 9 xoff) 1.5] dir)
+      ;(draw-player ctx [(+ 9 xoff) 1.5] dir)
 
       ;; up/down character
-      (draw-player ctx [15 (- 1.1 yoff)] :right)
+      ;(draw-player ctx [15 (- 1.1 yoff)] :right)
 
       
       (let [item-number (Math/floor (* (/ (mod factor 0.1) 0.1) 3))
@@ -747,7 +782,7 @@
 
         ;; the player holding the icon
         (.drawImage ctx item-img (* 2 238) (* 2 80))
-        (draw-player ctx [16 5] :left)
+        ;(draw-player ctx [16 5] :left)
 
         ))
     
@@ -789,7 +824,7 @@
 (def *game-states*
   {:start
    {:setup once-only-setup
-    :after-ticks (fn [] :instructions)}
+    :after-ticks (fn [] :setup-map)}
 
    :instructions
    {:setup prepare-instructions
