@@ -6,7 +6,7 @@
                                 vec-mag vec-negate reset-tick-clock
                                 rect-center viewport-rect clear display
                                 tick-entities tick to-rect draw rect-intersect
-                                rect-offset
+                                rect-offset rect-width rect-height
                                 drag-force-generator gravity-force-generator
                                 integrate-particle spring-force
                                 apply-particle-vs-map load-map draw-map
@@ -20,7 +20,6 @@
                                 set-map-idx coords->idx format get-pixel get-pixel-data])
         (showoff.core :only [content clj->js Viewport prepare-input
                              keyboard-velocity-generator until-false
-                             jump-velocity-generator ground-friction-generator
                              request-animation by-id]))
   (:require (goog.dom :as dom)
             (goog.string :as string)
@@ -95,13 +94,40 @@
                  :above [0 -1]
                  :below [0 1]})
 
+(def orthogonal-offset {:left [0 1]
+                        :right [0 1]
+                        :above [1 0]
+                        :below [1 0]})
+
+(defn rect-edge-length [rect dir]
+  (condp dir =
+    :left (rect-height rect)
+    :right (rect-height rect)
+    :above (rect-width rect)
+    :below (rect-width rect)))
+
 (defn kind-towards? [rect dir kind]
   (let [center (rect-center rect)
-        test-point (vec-add center (dir-offset dir))
+        offset (dir-offset dir)
+        test-point (vec-add center offset)
         idx (coords->idx @*current-map* test-point)
         rec (get-map-idx @*current-map* idx)]
-    (when (kind rec)
-      idx)))
+    (if (kind rec) idx
+        
+      ;; now we search by offsetting the corners of our rect to make
+      ;; sure that we're exhauting everything visually in the
+      ;; direction of interest
+      (let [ortho-offset (vec-scale (orthogonal-offset dir)
+                                    (* 0.5 (rect-edge-length rect dir)))
+            test-point2 (vec-add test-point ortho-offset)
+            idx2 (coords->idx @*current-map* test-point2)
+            rec2 (get-map-idx @*current-map* idx2)]
+        (if (kind rec2) idx2
+            ;; try the other direction
+            (let [test-point3 (vec-sub test-point ortho-offset)
+                  idx3 (coords->idx @*current-map* test-point3)
+                  rec3 (get-map-idx @*current-map* idx3)]
+              (if (kind rec3) idx3)))))))
 
 (defn breakable-underneath? [rect]
   (kind-towards? rect :below :breakable))
@@ -174,9 +200,9 @@
         (add-entity @*current-map* (add-collectable :rubble (idx->coords @*current-map* idx) (take-brick idx)))))))
 
 (defn fillable? [rec]
-  (let [player-idx (coords->idx @*current-map* (rect-center (to-rect *player*)))
-        rec-idx (coords->idx @*current-map* (:coords rec))]
-    (and (= (:kind rec) :skip) (not (= player-idx rec-idx)))))
+  (let [[tx ty] (:coords rec)
+        rec-rect [tx ty 1 1]]
+    (and (= (:kind rec) :skip) (not (rect-intersect (to-rect *player*) rec-rect)))))
 
 (defrecord ConsumableStack [kind rec contents]
   Iconic
