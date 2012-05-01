@@ -49,7 +49,7 @@
 (def *keys-collected* (atom 0))
 (def *total-keys* (atom 0))
 (def *bricks-destroyed* (atom 0))
-(def *debug-mode* true)
+(def *debug-mode* false)
 
 (defn play-sound [key]
   (.play *media-player* (name key)))
@@ -613,7 +613,7 @@
   (add-entity @*current-map* *player*)
   (add-entity @*current-map* (Bag. *bag*))
   
-  (set! *game-timer* (Timer. (* 4 60) (atom {})))
+  (set! *game-timer* (Timer. (* 2 60) (atom {})))
   (add-entity @*current-map* *game-timer*)
   (reset-tick-clock)
   
@@ -689,9 +689,15 @@
    (set! (.-innerHTML (by-id "console")) (pr-str (input/state))))
 
   ;; next state
-  (if (= (timer-time *game-timer*) 0)
-    :show-score
-    :game))
+  (cond
+   (= (timer-time *game-timer*) 0)
+   :show-score
+
+   (= @*keys-collected* @*total-keys*)
+   :finished
+
+   :else
+   :game))
 
 (def *base-dialog* nil)
 (def *instructions* nil)
@@ -775,11 +781,11 @@
 
 (def *scorescreen-cooldown* (atom {}))
 
-(defn prepare-scorescreen [callback]
+(defn prepare-score-screen [callback]
   (cooldown-start *scorescreen-cooldown* 1)
   (callback))
 
-(defn scorescreen [ticks]
+(defn score-screen [ticks]
   ;; don't clear, leave whatever used to be on the screen
   (let [ctx (gfx/context (display))
         key-img (:image (:key *collectables*))]
@@ -799,6 +805,29 @@
     :setup-map
     :show-score))
 
+(defn prepare-finished-screen [callback]
+  (cooldown-start *scorescreen-cooldown* 1)
+  (callback))
+
+(defn finished-screen [ticks]
+  (let [ctx (gfx/context (display))
+        key-img (:image (:key *collectables*))]
+    (.drawImage ctx *base-dialog* 0 0)
+    (draw-text-centered ctx *hud-font* "Amazing!!" [320 100])
+    (.drawImage ctx key-img 216 150)
+    (draw-text ctx *hud-font* (format "All %d found" @*total-keys*) [264 158])
+    (.drawImage ctx *money-icon* 216 182)
+    (draw-text ctx *hud-font* (format "$%d" (* 1000 @*bricks-destroyed*)) [264 190])
+    (draw-text ctx *hud-font* "of damage done" [264 222])
+    
+    (draw-text ctx *hud-font* "Press a Key" [264 286]))
+  
+  (cooldown-tick *scorescreen-cooldown*)
+  
+  (if (and (is-cool? *scorescreen-cooldown*) (any-keys-pressed?))
+    :setup-map
+    :finished))
+
 (def *game-states*
   {:start
    {:setup once-only-setup
@@ -817,9 +846,12 @@
     :after-ticks draw-world}
 
    :show-score
-   {:setup prepare-scorescreen
-    :after-ticks scorescreen}
-   
+   {:setup prepare-score-screen
+    :after-ticks score-screen}
+
+   :finished
+   {:setup prepare-finished-screen
+    :after-ticks finished-screen}
    })
 
 (def *current-game-state* (atom nil))
