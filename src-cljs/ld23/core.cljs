@@ -7,21 +7,22 @@
                                 tick-entities tick to-rect draw
                                 drag-force-generator gravity-force-generator
                                 integrate-particle spring-force
-                                apply-particle-vs-map load-map draw-map
+                                apply-particle-vs-map
                                 draw-sprite
                                 draw-entities filled-rect
-                                color map-collisions rect->idxs idx->coords
+                                color map-collisions
                                 resize-nearest-neighbor record-vs-rect
                                 set-display-and-viewport cycle-once
                                 head-bumped-map with-loaded-font draw-text
-                                draw-text-centered stats-string get-map-idx fill-style
-                                set-map-idx coords->idx format])
+                                draw-text-centered stats-string fill-style
+                                format])
         (showoff.core :only [content clj->js Viewport prepare-input
                              keyboard-velocity-generator until-false
                              request-animation by-id]))
   (:require [showoff.vec :as vec]
             [showoff.rect :as rect]
             [showoff.gfx :as gfx]
+            [showoff.map :as map]
             [goog.dom :as dom]
             [goog.string :as string]
             [goog.events :as gevents]
@@ -99,41 +100,8 @@
     (play-sound :powerup)
     (remove-entity @*current-map* c)))
 
-(def dir-offset {:left [-1 0]
-                 :right [1 0]
-                 :above [0 -1]
-                 :below [0 1]})
-
-(def orthogonal-offset {:left [0 1]
-                        :right [0 1]
-                        :above [1 0]
-                        :below [1 0]})
-
-(defn kind-towards? [rect dir kind]
-  (let [center (rect/center rect)
-        offset (dir-offset dir)
-        test-point (vec/add center offset)
-        idx (coords->idx @*current-map* test-point)
-        rec (get-map-idx @*current-map* idx)]
-    (if (kind rec) idx
-        
-      ;; now we search by offsetting the corners of our rect to make
-      ;; sure that we're exhauting everything visually in the
-      ;; direction of interest
-      (let [ortho-offset (vec/scale (orthogonal-offset dir)
-                                    (* 0.5 (rect/edge-length rect dir)))
-            test-point2 (vec/add test-point ortho-offset)
-            idx2 (coords->idx @*current-map* test-point2)
-            rec2 (get-map-idx @*current-map* idx2)]
-        (if (kind rec2) idx2
-            ;; try the other direction
-            (let [test-point3 (vec/sub test-point ortho-offset)
-                  idx3 (coords->idx @*current-map* test-point3)
-                  rec3 (get-map-idx @*current-map* idx3)]
-              (if (kind rec3) idx3)))))))
-
 (defn breakable-underneath? [rect]
-  (kind-towards? rect :below :breakable))
+  (map/kind-towards? @*current-map* rect :below :breakable))
 
 ;;; bag (we need to be able to tick this)
 (defrecord Bag [contents]
@@ -151,8 +119,8 @@
   (reset! *bag* []))
 
 (defn take-brick [idx]
-  (let [rec (get-map-idx @*current-map* idx)]
-    (set-map-idx @*current-map* idx {:kind :skip})
+  (let [rec (map/get-map-idx @*current-map* idx)]
+    (map/set-map-idx @*current-map* idx {:kind :skip})
     (when (not (:used rec)) (swap! *bricks-destroyed* inc))
     rec))
 
@@ -177,7 +145,7 @@
     (if-let [idx (breakable-underneath? (to-rect user))]
       (do
         (play-sound :dig)
-        (add-entity @*current-map* (add-collectable :rubble (idx->coords @*current-map* idx) (take-brick idx)))))))
+        (add-entity @*current-map* (add-collectable :rubble (map/idx->coords @*current-map* idx) (take-brick idx)))))))
 
 (defrecord Blowtorch [position rec max-cooldown state]
   showoff.showoff.Rectable
@@ -197,10 +165,10 @@
 
   Useable
   (use-thing [c user]
-    (if-let [idx (kind-towards? (to-rect user) (:direction @(:particle user)) :breakable)]
+    (if-let [idx (map/kind-towards? @*current-map* (to-rect user) (:direction @(:particle user)) :breakable)]
       (do
         (play-sound :dig)
-        (add-entity @*current-map* (add-collectable :rubble (idx->coords @*current-map* idx) (take-brick idx)))))))
+        (add-entity @*current-map* (add-collectable :rubble (map/idx->coords @*current-map* idx) (take-brick idx)))))))
 
 (defn fillable? [rec]
   (let [[tx ty] (:coords rec)
@@ -242,13 +210,13 @@
 
   Useable
   (use-thing [c user]
-    (if-let [below-fillable-idx (kind-towards? (to-rect user) :below fillable?)]
+    (if-let [below-fillable-idx (map/kind-towards? @*current-map* (to-rect user) :below fillable?)]
       ;; if we can fill below, do that
-      (set-map-idx @*current-map* below-fillable-idx (conj map-rec {:used true}))
+      (map/set-map-idx @*current-map* below-fillable-idx (conj map-rec {:used true}))
 
       ;; otherwise, try the direction we're facing
-      (when-let [idx (kind-towards? (to-rect user) (:direction @(:particle user)) fillable?)]
-        (set-map-idx @*current-map* idx (conj map-rec {:used true}))))))
+      (when-let [idx (map/kind-towards? @*current-map* (to-rect user) (:direction @(:particle user)) fillable?)]
+        (map/set-map-idx @*current-map* idx (conj map-rec {:used true}))))))
 
 (defrecord Fist [rec state]
   Iconic
@@ -407,7 +375,7 @@
 (defn with-loaded-map [callback]
   (gfx/with-img (str "graphics/world2.gif")
     (fn [map-img]
-      (reset! *current-map* (load-map map-img *symbols*))
+      (reset! *current-map* (map/load map-img *symbols*))
       (callback))))
 
 (def ^:dynamic *command-state-override* nil)
@@ -559,14 +527,12 @@
       (cooldown-start particle .3))
     
     ;; look around our neighboring rects for collectables
-    (doseq [idx (rect->idxs @*current-map* (to-rect player))]
-      (let [rec (get-map-idx @*current-map* idx)
-            objects (:objects rec)
-            collectables (filter collectable? @objects)]
-        (doseq [collectable collectables]
-          (when (rect/intersect (to-rect collectable) (to-rect player))
-            (collect collectable)))))
-
+    (map/with-objects-in-rect @*current-map* (to-rect player)
+      (fn [obj]
+        (when (and (collectable? obj)
+                   (rect/intersect (to-rect obj) (to-rect player)))
+          (collect obj))))
+    
     (player-movement player particle)))
 
 (defn walk-frame [direction frame]
@@ -708,7 +674,8 @@
           [vx vy _ _] (viewport-rect)]
       (gfx/clear (display))
       (.drawImage ctx *backdrop* (- 0 50 (* 13 vx)) (- 0 10 (* 13 vy)))
-      (draw-map ctx @*current-map*)
+      (map/draw ctx @*current-map* (viewport-rect)
+                showoff.showoff.*tile-in-world-dims*)
       (draw-entities ctx)
 
       ;; draw the hitrect
