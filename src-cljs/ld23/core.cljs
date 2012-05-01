@@ -37,6 +37,8 @@
 (def *hud-font* nil)
 (def *font-chars* "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"?!./:$")
 
+(def *player* nil)
+
 (def *backdrop* (gfx/get-img (str "graphics/backdrop.png")))
 (def *player-sprite* nil)
 (def *money-icon* nil)
@@ -60,6 +62,11 @@
 
 (defprotocol Iconic
   (icon [obj]))
+
+(defn add-collectable [key pos & more]
+  (let [rec (*collectables* key)
+        coll (apply (:spawn rec) pos rec more)]
+    (add-entity @*current-map* coll)))
 
 (defn posrec->rect [position rec]
   (let [[w h] (:dims rec)
@@ -102,6 +109,9 @@
 
 (defn breakable-underneath? [rect]
   (map/kind-towards? @*current-map* rect :below :breakable))
+
+(defn collidable-underneath? [rect]
+  (map/kind-towards? @*current-map* rect :below :collidable))
 
 ;;; bag (we need to be able to tick this)
 (defrecord Bag [contents]
@@ -545,7 +555,7 @@
   (let [particle @(:particle p)
         direction (or (:direction particle) :right)
         sprite-key (cond
-                    (not (supported-by-map @*current-map* (to-rect *player*)))
+                    (not (collidable-underneath? (to-rect *player*)))
                     (if (= direction :left)
                       :fall-left
                       :fall-right)
@@ -558,13 +568,6 @@
         sprite (*player-sprite* sprite-key)]
     (draw-sprite ctx sprite (:position particle))))
 
-;;; the particle provides keyboard interaction, jumping, etc
-(def *player* nil)
-
-(defn add-collectable [key pos & more]
-  (let [rec (*collectables* key)
-        coll (apply (:spawn rec) pos rec more)]
-    (add-entity @*current-map* coll)))
 
 (def +viewport-spring-constant+ 60)
 (def +viewport-drag-coefficient+ 2)
@@ -701,7 +704,7 @@
 
   (when *debug-mode*
    (set! (.-innerHTML (by-id "console")) (pr-str (input-state))))
-  
+
   ;; next state
   (if (= (timer-time *game-timer*) 0)
     :show-score
@@ -919,7 +922,7 @@
     (add-entity {} viewport)
     (with-prepared-assets
       (fn []
-        (setup-world)
+        (setup-world identity)
         (until-false game-loop)))))
 
 

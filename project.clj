@@ -3,6 +3,10 @@
   :dependencies [[org.clojure/clojure "1.3.0"]]
   :dev-dependencies [[lein-cljsbuild "0.1.8"]]
 
+  :git-dependencies [["https://github.com/clojure/clojurescript.git"
+                      "2e46d194dfa9df1527aa87b693da28d56e972117"]]
+  :extra-classpath-dirs [".lein-git-deps/clojurescript/src/clj"
+                         ".lein-git-deps/clojurescript/src/cljs"]
   :cljsbuild
   {:builds
    [
@@ -11,6 +15,7 @@
      {:output-to "javascripts/main.js"
       :optimizations :whitespace
       :pretty-print true
+      :static-fns true
       }
      :id "standard"
      }
@@ -21,6 +26,7 @@
       :optimizations :advanced
       :pretty-print false
       :externs ["jukebox-externs.js"]
+      :static-fns true
       }
      :id "advanced"
      }
