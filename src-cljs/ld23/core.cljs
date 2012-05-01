@@ -1,33 +1,33 @@
 (ns ld23.core
-  (:use (showoff.showoff :only [get-img remove-entity add-entity clear-entities
+  (:use (showoff.showoff :only [remove-entity add-entity clear-entities
                                 supported-by-map
                                 Rectable Tickable Drawable
-                                vec-add vec-dot vec-scale vec-sub vec-unit
-                                vec-mag vec-negate reset-tick-clock
-                                rect-center viewport-rect clear display
-                                tick-entities tick to-rect draw rect-intersect
-                                rect-offset rect-width rect-height
+                                reset-tick-clock
+                                viewport-rect display
+                                tick-entities tick to-rect draw
                                 drag-force-generator gravity-force-generator
                                 integrate-particle spring-force
                                 apply-particle-vs-map load-map draw-map
-                                draw-sprite make-canvas get-img with-img
-                                draw-entities img-dims context filled-rect
+                                draw-sprite
+                                draw-entities filled-rect
                                 color map-collisions rect->idxs idx->coords
                                 resize-nearest-neighbor record-vs-rect
                                 set-display-and-viewport cycle-once
                                 head-bumped-map with-loaded-font draw-text
                                 draw-text-centered stats-string get-map-idx fill-style
-                                set-map-idx coords->idx format get-pixel get-pixel-data])
+                                set-map-idx coords->idx format])
         (showoff.core :only [content clj->js Viewport prepare-input
                              keyboard-velocity-generator until-false
                              request-animation by-id]))
-  (:require (goog.dom :as dom)
-            (goog.string :as string)
-            (goog.events :as gevents)
-            (goog.Timer :as timer)
-            (goog.events.KeyHandler :as geventskey)
-            (clojure.browser.event :as event)
-            (clojure.browser.repl :as repl)))
+  (:require [showoff.vec :as vec]
+            [showoff.rect :as rect]
+            [showoff.gfx :as gfx]
+            [goog.dom :as dom]
+            [goog.string :as string]
+            [goog.events :as gevents]
+            [goog.Timer :as timer]
+            [goog.events.KeyHandler :as geventskey]
+            [clojure.browser.repl :as repl]))
 
 (def *canvas* nil)
 (def *current-map* (atom nil))
@@ -36,7 +36,7 @@
 (def *hud-font* nil)
 (def *font-chars* "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"?!./:$")
 
-(def *backdrop* (get-img (str "graphics/backdrop.png")))
+(def *backdrop* (gfx/get-img (str "graphics/backdrop.png")))
 (def *player-sprite* nil)
 (def *money-icon* nil)
 (def *hud* nil)
@@ -62,7 +62,7 @@
 
 (defn posrec->rect [position rec]
   (let [[w h] (:dims rec)
-        [px py] (vec-add position [(* 0.5 (- 1 w))
+        [px py] (vec/add position [(* 0.5 (- 1 w))
                                    (* 0.5 (- 1 h))])]
     [px py w h]))
 
@@ -109,17 +109,10 @@
                         :above [1 0]
                         :below [1 0]})
 
-(defn rect-edge-length [rect dir]
-  (condp dir =
-    :left (rect-height rect)
-    :right (rect-height rect)
-    :above (rect-width rect)
-    :below (rect-width rect)))
-
 (defn kind-towards? [rect dir kind]
-  (let [center (rect-center rect)
+  (let [center (rect/center rect)
         offset (dir-offset dir)
-        test-point (vec-add center offset)
+        test-point (vec/add center offset)
         idx (coords->idx @*current-map* test-point)
         rec (get-map-idx @*current-map* idx)]
     (if (kind rec) idx
@@ -127,14 +120,14 @@
       ;; now we search by offsetting the corners of our rect to make
       ;; sure that we're exhauting everything visually in the
       ;; direction of interest
-      (let [ortho-offset (vec-scale (orthogonal-offset dir)
-                                    (* 0.5 (rect-edge-length rect dir)))
-            test-point2 (vec-add test-point ortho-offset)
+      (let [ortho-offset (vec/scale (orthogonal-offset dir)
+                                    (* 0.5 (rect/edge-length rect dir)))
+            test-point2 (vec/add test-point ortho-offset)
             idx2 (coords->idx @*current-map* test-point2)
             rec2 (get-map-idx @*current-map* idx2)]
         (if (kind rec2) idx2
             ;; try the other direction
-            (let [test-point3 (vec-sub test-point ortho-offset)
+            (let [test-point3 (vec/sub test-point ortho-offset)
                   idx3 (coords->idx @*current-map* test-point3)
                   rec3 (get-map-idx @*current-map* idx3)]
               (if (kind rec3) idx3)))))))
@@ -212,7 +205,7 @@
 (defn fillable? [rec]
   (let [[tx ty] (:coords rec)
         rec-rect [tx ty 1 1]]
-    (and (= (:kind rec) :skip) (not (rect-intersect (to-rect *player*) rec-rect)))))
+    (and (= (:kind rec) :skip) (not (rect/intersect (to-rect *player*) rec-rect)))))
 
 (defrecord ConsumableStack [kind rec contents]
   Iconic
@@ -284,27 +277,16 @@
     (draw-text-centered ctx *hud-font* (format "%2d:%02d" minutes seconds) [55 452])))
 
 (defn fill-template [pdata [px py] sym]
-  (let [[dw dh] showoff.showoff.*tile-in-world-dims*
-        [sw sh] (:dims pdata)
-        pw (/ dw 16)
-        ph (/ dh 16)
-        num-pixels (* 16 16)
-        canvas (make-canvas [dw dh])
-        ctx (context canvas)
-        [br bg bb] sym]
-    (dotimes [ii num-pixels]
-      (let [x (mod ii 16)
-            y (Math/floor (/ ii 16))
-            src-x (+ px x)
-            src-y (+ py y)
-            [scale _ _] (get-pixel pdata src-x src-y)
-            scale (/ scale 255)]
-        
-        (set! (.-fillStyle ctx) (color [(Math/round (* scale br))
-                                        (Math/round (* scale bg))
-                                        (Math/round (* scale bb))]))
-        (.fillRect ctx (Math/floor (* x pw)) (Math/floor (* y ph))
-                   (Math/ceil pw) (Math/ceil ph))))
+  (let [src-rect [px py 16 16]
+        [r g b] sym
+        canvas (gfx/map-nearest-neighbor
+                pdata src-rect showoff.showoff.*tile-in-world-dims*
+                (fn [dest-data dest-base src-data src-base]
+                  (let [scale (/ (aget src-data src-base) 255)]
+                    (aset dest-data dest-base (* scale r))
+                    (aset dest-data (+ 1 dest-base) (* scale g))
+                    (aset dest-data (+ 2 dest-base) (* scale b))
+                    (aset dest-data (+ 3 dest-base) 255))))]
 
     {:kind :image
      :image canvas
@@ -327,7 +309,7 @@
 
 (defn setup-symbols [sprites]
   (let [dims showoff.showoff.*tile-in-world-dims*
-        pdata (get-pixel-data sprites)
+        pdata (gfx/get-pixel-data sprites)
         base-symbols {[255 255 255]
                       {:kind :skip}
       
@@ -373,8 +355,9 @@
            :right-walk1 (resize-nearest-neighbor pdata [0 64 16 16] dims)
            :right-walk2 (resize-nearest-neighbor pdata [16 64 16 16] dims)
            :left-walk1 (resize-nearest-neighbor pdata [32 64 16 16] dims)
-           :left-walk2 (resize-nearest-neighbor pdata [48 64 16 16] dims)}
-          )
+           :left-walk2 (resize-nearest-neighbor pdata [48 64 16 16] dims)
+           :fall-right (resize-nearest-neighbor pdata [64 16 16 16] dims)
+           :fall-left (resize-nearest-neighbor pdata [64 32 16 16] dims)})
 
     (set! *money-icon* (resize-nearest-neighbor pdata [64 0 16 16] dims))
     
@@ -408,21 +391,21 @@
     ))
 
 (defn with-prepared-assets [callback]
-  (with-loaded-font "graphics/basic-font.gif" *font-chars* [8 8] 2 (color [128 0 0])
+  (with-loaded-font "graphics/basic-font.gif" *font-chars* [8 8] 2 [128 0 0]
     (fn [font]
       (set! *hud-font* font)))
 
-  (with-img (str "graphics/hud.png")
+  (gfx/with-img (str "graphics/hud.png")
     (fn [hud]
-      (set! *hud* (resize-nearest-neighbor (get-pixel-data hud) [640 480]))
+      (set! *hud* (resize-nearest-neighbor (gfx/get-pixel-data hud) [640 480]))
       
-      (with-img (str "graphics/sprites.png")
+      (gfx/with-img (str "graphics/sprites.png")
         (fn [sprites]
           (setup-symbols sprites)
           (callback))))))
 
 (defn with-loaded-map [callback]
-  (with-img (str "graphics/world2.gif")
+  (gfx/with-img (str "graphics/world2.gif")
     (fn [map-img]
       (reset! *current-map* (load-map map-img *symbols*))
       (callback))))
@@ -456,12 +439,12 @@
 (def +max-fall+ 12)
 
 (defn move-check-map-collision [map [dx dy] rect on-x-collide on-y-collide]
-  (let [x-moved-rect (rect-offset rect [dx 0])
+  (let [x-moved-rect (rect/offset rect [dx 0])
         x-offset (if-let [hit-idx (first (map-collisions map x-moved-rect))]
                    (do (on-x-collide hit-idx) 0)
                    dx)
 
-        y-moved-rect (rect-offset rect [x-offset dy])
+        y-moved-rect (rect/offset rect [x-offset dy])
         y-offset (if-let [hit-idx (first (map-collisions map y-moved-rect))]
                    (do (on-y-collide hit-idx) 0)
                    dy)]
@@ -472,11 +455,11 @@
   ;; motion and collision detection
   (cooldown-tick particle :jump-timer)
   (when ((input-state) (.-RIGHT gevents/KeyCodes))
-    (swap! particle conj {:velocity (vec-add (particle-velocity particle)
+    (swap! particle conj {:velocity (vec/add (particle-velocity particle)
                                              [+player-accel+ 0])}))
   
   (when ((input-state) (.-LEFT gevents/KeyCodes))
-    (swap! particle conj {:velocity (vec-add (particle-velocity particle)
+    (swap! particle conj {:velocity (vec/add (particle-velocity particle)
                                              [(- +player-accel+) 0])}))
   (if (supported-by-map @*current-map* (to-rect player))
     ;; on the ground, check for jump
@@ -505,11 +488,11 @@
    particle conj
    {
     :position
-    (vec-add
+    (vec/add
      (particle-position particle)
      (move-check-map-collision
       @*current-map*
-      (vec-scale (particle-velocity particle)
+      (vec/scale (particle-velocity particle)
                  showoff.showoff.+secs-per-tick+)
       (to-rect player)
       ;; on-x-collide
@@ -581,7 +564,7 @@
             objects (:objects rec)
             collectables (filter collectable? @objects)]
         (doseq [collectable collectables]
-          (when (rect-intersect (to-rect collectable) (to-rect player))
+          (when (rect/intersect (to-rect collectable) (to-rect player))
             (collect collectable)))))
 
     (player-movement player particle)))
@@ -595,9 +578,17 @@
 (defn draw-player-entity [ctx p]
   (let [particle @(:particle p)
         direction (or (:direction particle) :right)
-        sprite-key (if (:walking particle)
-                     (walk-frame direction (timer-scaled (:particle p) :walk-timer 4))
-                     direction)
+        sprite-key (cond
+                    (not (supported-by-map @*current-map* (to-rect *player*)))
+                    (if (= direction :left)
+                      :fall-left
+                      :fall-right)
+
+                    (:walking particle)
+                    (walk-frame direction (timer-scaled (:particle p) :walk-timer 4))
+
+                    :else
+                    direction)
         sprite (*player-sprite* sprite-key)]
     (draw-sprite ctx sprite (:position particle))))
 
@@ -651,8 +642,8 @@
       
       ;; try to keep the player character basically centered
       :force-generators
-      [(fn [p] (spring-force (vec-sub (:position @(:particle *player*))
-                                      (vec-sub (rect-center (viewport-rect))
+      [(fn [p] (spring-force (vec/sub (:position @(:particle *player*))
+                                      (vec/sub (rect/center (viewport-rect))
                                                [0 2]))
                              +viewport-max-displacement+
                              +viewport-spring-constant+))
@@ -660,9 +651,9 @@
        
        ;; bring to rest if we're not moving very fast
        (fn [p]
-         (let [spd (vec-mag (:velocity p))
-               drag-dir (vec-negate (vec-unit (:velocity p)))]
-           (vec-scale drag-dir (* spd 0.3))))]})))
+         (let [spd (vec/mag (:velocity p))
+               drag-dir (vec/negate (vec/unit (:velocity p)))]
+           (vec/scale drag-dir (* spd 0.3))))]})))
 
   (set-display-and-viewport *canvas* [640 480] #(to-rect *viewport*))
   
@@ -713,12 +704,12 @@
 (defn draw-world [ticks]
   ;; only draw if we actually ticked
   (when (> ticks 0)
-    (clear)
-    (let [ctx (context)
+    (let [ctx (gfx/context (display))
           [vx vy _ _] (viewport-rect)]
+      (gfx/clear (display))
       (.drawImage ctx *backdrop* (- 0 50 (* 13 vx)) (- 0 10 (* 13 vy)))
-      (draw-map @*current-map*)
-      (draw-entities)
+      (draw-map ctx @*current-map*)
+      (draw-entities ctx)
 
       ;; draw the hitrect
       ;;(filled-rect ctx (to-rect *player*) (color [255 0 255]))
@@ -726,7 +717,7 @@
       (draw-player-entity ctx *player*)
       
       ;; draw the hud
-      (let [[w h] (img-dims *hud*)
+      (let [[w h] (gfx/img-dims *hud*)
             key-img (:image (:key *collectables*))]
         (.drawImage ctx *hud* 0 0 w h 0 0 640 480)
         (.drawImage ctx key-img (* 2 73) (* 2 218))
@@ -737,7 +728,7 @@
       
       ;; draw whatever is in the front of the bag
       (let [item (first @*bag*)]
-        (.drawImage ctx (icon item) 592 436))
+        (.drawImage ctx (icon item) 548 436))
       
       (draw-timer ctx *game-timer*)))
 
@@ -753,12 +744,12 @@
 (def *instructions* nil)
 
 (defn with-dialog-assets [callback]
-  (with-img "graphics/dialog.png"
+  (gfx/with-img "graphics/dialog.png"
     (fn [dialog]
-      (set! *base-dialog* (resize-nearest-neighbor (get-pixel-data dialog) [640 480]))
-      (with-img "graphics/instructions.png"
+      (set! *base-dialog* (resize-nearest-neighbor (gfx/get-pixel-data dialog) [640 480]))
+      (gfx/with-img "graphics/instructions.png"
         (fn [instr]
-          (set! *instructions* (resize-nearest-neighbor (get-pixel-data instr) [648 480]))
+          (set! *instructions* (resize-nearest-neighbor (gfx/get-pixel-data instr) [648 480]))
           (callback))))))
 
 (def *instruction-time* (atom nil))
@@ -782,7 +773,7 @@
   (not (empty? (input-state))))
 
 (defn instructions-screen [ticks]
-  (let [ctx (context)]
+  (let [ctx (gfx/context (display))]
     (let [factor (/ @*instruction-time* +total-instruction-time+)
           v (* 2 Math/PI 3 factor)
           xoff (Math/sin v)
@@ -837,7 +828,7 @@
 
 (defn scorescreen [ticks]
   ;; don't clear, leave whatever used to be on the screen
-  (let [ctx (context)
+  (let [ctx (gfx/context (display))
         key-img (:image (:key *collectables*))]
     (.drawImage ctx *base-dialog* 0 0)
     (draw-text-centered ctx *hud-font* "Time is Up!" [320 100])
@@ -920,7 +911,7 @@
 
 (defn ^:export game []
   (let [screen-size [640 480]
-        canvas (make-canvas screen-size)]
+        canvas (gfx/make-canvas screen-size)]
     
     (dom/appendChild (content) canvas)
     (set! *canvas* canvas)
@@ -936,7 +927,7 @@
   (dom/setTextContent (content) "")
 
   (let [screen-size [640 480]
-        canvas (make-canvas screen-size)
+        canvas (gfx/make-canvas screen-size)
         viewport-speed (* 30 showoff.showoff.+secs-per-tick+)
         viewport (Viewport.
                   [16 10]
