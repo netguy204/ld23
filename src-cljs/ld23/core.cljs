@@ -10,19 +10,19 @@
                                 apply-particle-vs-map
                                 draw-sprite
                                 draw-entities filled-rect
-                                color map-collisions
+                                color move-check-map-collision
                                 resize-nearest-neighbor record-vs-rect
                                 set-display-and-viewport cycle-once
                                 head-bumped-map with-loaded-font draw-text
                                 draw-text-centered stats-string fill-style
                                 format])
-        (showoff.core :only [content clj->js Viewport prepare-input
-                             keyboard-velocity-generator until-false
+        (showoff.core :only [clj->js Viewport
                              request-animation by-id]))
   (:require [showoff.vec :as vec]
             [showoff.rect :as rect]
             [showoff.gfx :as gfx]
             [showoff.map :as map]
+            [showoff.input :as input]
             [goog.dom :as dom]
             [goog.string :as string]
             [goog.events :as gevents]
@@ -49,7 +49,7 @@
 (def *keys-collected* (atom 0))
 (def *total-keys* (atom 0))
 (def *bricks-destroyed* (atom 0))
-(def *debug-mode* false)
+(def *debug-mode* true)
 
 (defn play-sound [key]
   (.play *media-player* (name key)))
@@ -233,7 +233,7 @@
   (icon [c] (:image rec))
 
   Useable
-  (use-thing [c] nil))
+  (use-thing [c user] nil))
 
 (defn timer-time [timer]
   (or (:time @(:state timer)) (:start timer)))
@@ -388,12 +388,6 @@
       (reset! *current-map* (map/load map-img *symbols*))
       (callback))))
 
-(def ^:dynamic *command-state-override* nil)
-
-(defn input-state []
-  (if *command-state-override*
-    *command-state-override*
-    showoff.core.*command-state-map*))
 
 (extend-type js/HTMLCanvasElement
   IHash
@@ -416,32 +410,19 @@
 (def +gravity+ 1)
 (def +max-fall+ 12)
 
-(defn move-check-map-collision [map [dx dy] rect on-x-collide on-y-collide]
-  (let [x-moved-rect (rect/offset rect [dx 0])
-        x-offset (if-let [hit-idx (first (map-collisions map x-moved-rect))]
-                   (do (on-x-collide hit-idx) 0)
-                   dx)
-
-        y-moved-rect (rect/offset rect [x-offset dy])
-        y-offset (if-let [hit-idx (first (map-collisions map y-moved-rect))]
-                   (do (on-y-collide hit-idx) 0)
-                   dy)]
-    
-    [x-offset y-offset]))
-
 (defn player-movement [player particle]
   ;; motion and collision detection
   (cooldown-tick particle :jump-timer)
-  (when ((input-state) (.-RIGHT gevents/KeyCodes))
+  (when (input/state? :right)
     (swap! particle conj {:velocity (vec/add (particle-velocity particle)
                                              [+player-accel+ 0])}))
   
-  (when ((input-state) (.-LEFT gevents/KeyCodes))
+  (when (input/state? :left)
     (swap! particle conj {:velocity (vec/add (particle-velocity particle)
                                              [(- +player-accel+) 0])}))
   (if (supported-by-map @*current-map* (to-rect player))
     ;; on the ground, check for jump
-    (when (and (is-cool? particle :jump-timer) ((input-state) (.-UP gevents/KeyCodes)))
+    (when (and (is-cool? particle :jump-timer) (input/state? :up))
       (cooldown-start particle 0.2 :jump-timer)
       (play-sound :jump)
       (swap! particle conj {:velocity [(nth (particle-velocity particle) 0)
@@ -509,30 +490,28 @@
     ;; record the last directon of motion so we can draw our sprite
     ;; facing that way
     (cond
-     ((input-state) (.-LEFT gevents/KeyCodes))
+     (input/state? :left)
      (swap! particle conj {:direction :left})
 
-     ((input-state) (.-RIGHT gevents/KeyCodes))
+     (input/state? :right)
      (swap! particle conj {:direction :right}))
 
     ;; mark ourselves walking or not-walking for animation
-    (if (or ((input-state) (.-LEFT gevents/KeyCodes))
-            ((input-state) (.-RIGHT gevents/KeyCodes)))
+    (if (or (input/state? :left) (input/state? :right))
       (swap! particle conj {:walking true})
       (swap! particle conj {:walking false}))
 
     ;; reset cooldown if no command keys are down
-    (when (not (or ((input-state) (.-DOWN gevents/KeyCodes))
-                   ((input-state) 32)))
+    (when (not (or (input/state? :down) (input/state? :space)))
       (swap! particle conj {:cooldown 0}))
 
     ;; see if we're trying to use something
-    (when (and (is-cool? particle) ((input-state) 32))
+    (when (and (is-cool? particle) (input/state? :space))
       (use-thing (first @*bag*) player)
       (cooldown-start particle .3))
 
     ;; cycle after our cooldown is done
-    (when (and (is-cool? particle) ((input-state) (.-DOWN gevents/KeyCodes)))
+    (when (and (is-cool? particle) (input/state? :down))
       (reset! *bag* (conj (into [] (rest @*bag*)) (first @*bag*)))
       (cooldown-start particle .3))
     
@@ -643,7 +622,6 @@
 (defn prepare-sound []
   (let [sounds {:resources ["sounds/music2.ogg"
                             "sounds/music2.mp3"]
-                :autoplay "bg-music"
                 :spritemap
                 {:bg-music
                  {:start 0.0
@@ -665,6 +643,11 @@
                  {:start 152
                   :end 152.4}
                  }}
+
+        ;; disable music in debug mode
+        sounds (if (not *debug-mode*)
+                 (conj sounds {:autoplay "bg-music"})
+                 sounds)
         
         mgrconfig {"useGameLoop" true}]
     (set! jukebox.Manager (jukebox.Manager. (clj->js mgrconfig)))
@@ -703,7 +686,7 @@
       (draw-timer ctx *game-timer*)))
 
   (when *debug-mode*
-   (set! (.-innerHTML (by-id "console")) (pr-str (input-state))))
+   (set! (.-innerHTML (by-id "console")) (pr-str (input/state))))
 
   ;; next state
   (if (= (timer-time *game-timer*) 0)
@@ -740,7 +723,7 @@
   (callback))
 
 (defn any-keys-pressed? []
-  (not (empty? (input-state))))
+  (not (empty? (input/state))))
 
 (defn instructions-screen [ticks]
   (let [ctx (gfx/context (display))]
@@ -883,47 +866,14 @@
   (let [screen-size [640 480]
         canvas (gfx/make-canvas screen-size)]
     
-    (dom/appendChild (content) canvas)
+    (dom/appendChild (by-id "content") canvas)
     (set! *canvas* canvas)
     (set-display-and-viewport *canvas* [640 480] #(vector 0 0 20 15))
     
-    (prepare-input)
+    (input/prepare input/standard-remapper)
     (prepare-sound)
     
     (game-loop)))
-
-
-(defn ^:export map-viewer []
-  (dom/setTextContent (content) "")
-
-  (let [screen-size [640 480]
-        canvas (gfx/make-canvas screen-size)
-        viewport-speed (* 30 showoff.showoff.+secs-per-tick+)
-        viewport (Viewport.
-                  [16 10]
-                  (atom
-                   {:mass 1
-                    :position [0 0]
-                    :velocity [0 0]
-                    
-                    :offset-generators
-                    [(keyboard-velocity-generator
-                      (.-LEFT gevents/KeyCodes) [(- viewport-speed) 0])
-                     (keyboard-velocity-generator
-                      (.-RIGHT gevents/KeyCodes) [viewport-speed 0])
-                     (keyboard-velocity-generator
-                      (.-UP gevents/KeyCodes) [0 (- viewport-speed)])
-                     (keyboard-velocity-generator
-                      (.-DOWN gevents/KeyCodes) [0 viewport-speed])]}))]
-    
-    (dom/appendChild (content) canvas)
-    (set-display-and-viewport canvas screen-size #(to-rect viewport))
-    (prepare-input)
-    (add-entity {} viewport)
-    (with-prepared-assets
-      (fn []
-        (setup-world identity)
-        (until-false game-loop)))))
 
 
 
