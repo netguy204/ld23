@@ -4,7 +4,7 @@
   :dev-dependencies [[lein-cljsbuild "0.1.8"]]
 
   :git-dependencies [["https://github.com/clojure/clojurescript.git"
-                      "2e46d194dfa9df1527aa87b693da28d56e972117"]]
+                      "b97dd8707f7d78d672cdc255a18ff52106f8f481"]]
   :extra-classpath-dirs [".lein-git-deps/clojurescript/src/clj"
                          ".lein-git-deps/clojurescript/src/cljs"]
   :cljsbuild
