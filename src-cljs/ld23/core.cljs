@@ -63,6 +63,37 @@
 (defprotocol Iconic
   (icon [obj]))
 
+(defprotocol Brain
+  (state [brain]))
+
+(defn state? [brain query]
+  ((state brain) query))
+
+(defrecord KeyboardBrain []
+  Brain
+  (state [brain] (input/state)))
+
+(defrecord BrainRecorder [brain recording]
+  showoff.showoff.Tickable
+  (tick [recorder]
+    (swap! recording conj (state brain))))
+
+(defrecord RecordedBrain [recording state]
+  showoff.showoff.Tickable
+  (tick [brain]
+    (swap! state inc))
+
+  Brain
+  (state [brain]
+    (let [idx @state]
+      (if (< idx (.-length recording))
+       (aget recording idx)
+       #{})))
+
+  cljs.core.IHash
+  (-hash [brain]
+    (.getUid js/goog brain)))
+
 (defn add-collectable [key pos & more]
   (let [rec (*collectables* key)
         coll (apply (:spawn rec) pos rec more)]
@@ -410,19 +441,19 @@
 (def +gravity+ 1)
 (def +max-fall+ 12)
 
-(defn player-movement [player particle]
+(defn player-movement [player particle brain]
   ;; motion and collision detection
   (cooldown-tick particle :jump-timer)
-  (when (input/state? :right)
+  (when (state? brain :right)
     (swap! particle conj {:velocity (vec/add (particle-velocity particle)
                                              [+player-accel+ 0])}))
   
-  (when (input/state? :left)
+  (when (state? brain :left)
     (swap! particle conj {:velocity (vec/add (particle-velocity particle)
                                              [(- +player-accel+) 0])}))
   (if (supported-by-map @*current-map* (to-rect player))
     ;; on the ground, check for jump
-    (when (and (is-cool? particle :jump-timer) (input/state? :up))
+    (when (and (is-cool? particle :jump-timer) (state? brain :up))
       (cooldown-start particle 0.2 :jump-timer)
       (play-sound :jump)
       (swap! particle conj {:velocity [(nth (particle-velocity particle) 0)
@@ -476,7 +507,7 @@
 (defn timer-scaled [mutable place scale]
   (Math/floor (/ (timer-value mutable place) scale)))
 
-(defrecord Player [particle]
+(defrecord Player [particle brain]
   showoff.showoff.Rectable
   (to-rect [player]
     (let [[x y] (:position @particle)]
@@ -490,28 +521,28 @@
     ;; record the last directon of motion so we can draw our sprite
     ;; facing that way
     (cond
-     (input/state? :left)
+     (state? brain :left)
      (swap! particle conj {:direction :left})
 
-     (input/state? :right)
+     (state? brain :right)
      (swap! particle conj {:direction :right}))
 
     ;; mark ourselves walking or not-walking for animation
-    (if (or (input/state? :left) (input/state? :right))
+    (if (or (state? brain :left) (state? brain :right))
       (swap! particle conj {:walking true})
       (swap! particle conj {:walking false}))
 
     ;; reset cooldown if no command keys are down
-    (when (not (or (input/state? :down) (input/state? :space)))
+    (when (not (or (state? brain :down) (state? brain :space)))
       (swap! particle conj {:cooldown 0}))
 
     ;; see if we're trying to use something
-    (when (and (is-cool? particle) (input/state? :space))
+    (when (and (is-cool? particle) (state? brain :space))
       (use-thing (first @*bag*) player)
       (cooldown-start particle .3))
 
     ;; cycle after our cooldown is done
-    (when (and (is-cool? particle) (input/state? :down))
+    (when (and (is-cool? particle) (state? brain :down))
       (reset! *bag* (conj (into [] (rest @*bag*)) (first @*bag*)))
       (cooldown-start particle .3))
     
@@ -522,7 +553,7 @@
                    (rect/intersect (to-rect obj) (to-rect player)))
           (collect obj))))
     
-    (player-movement player particle)))
+    (player-movement player particle brain)))
 
 (defn walk-frame [direction frame]
   (let [frameset (if (= direction :left)
@@ -576,9 +607,10 @@
      {:mass 5
       :position [5 5]
       :velocity [0 0]
-    
-      })))
-
+      })
+    (KeyboardBrain.)))
+  (add-entity @*current-map* *recorded-brain*)
+  
   (set!
    *viewport*
    (Viewport.
@@ -907,5 +939,16 @@
     
     (game-loop)))
 
+(def *brain-recorder* nil)
 
+(defn ^:export record-player []
+  (when *brain-recorder*
+    (remove-entity @*current-map* *brain-recorder*))
+  
+  (let [brain (:brain *player*)
+        recorder (BrainRecorder. brain (atom []))]
+    (add-entity @*current-map* recorder)
+    (set! *brain-recorder* recorder)))
 
+(defn ^:export dump-recording []
+  (.log js/console (pr-str @(:recording *brain-recorder*))))
