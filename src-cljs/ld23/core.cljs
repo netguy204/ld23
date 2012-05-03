@@ -23,11 +23,13 @@
             [showoff.gfx :as gfx]
             [showoff.map :as map]
             [showoff.input :as input]
+            [showoff.ai :as brain]
             [goog.dom :as dom]
             [goog.string :as string]
             [goog.events :as gevents]
             [goog.Timer :as timer]
             [goog.events.KeyHandler :as geventskey]
+            [goog.Uri :as uri]
             [clojure.browser.repl :as repl]))
 
 (def *canvas* nil)
@@ -62,37 +64,6 @@
 
 (defprotocol Iconic
   (icon [obj]))
-
-(defprotocol Brain
-  (state [brain]))
-
-(defn state? [brain query]
-  ((state brain) query))
-
-(defrecord KeyboardBrain []
-  Brain
-  (state [brain] (input/state)))
-
-(defrecord BrainRecorder [brain recording]
-  showoff.showoff.Tickable
-  (tick [recorder]
-    (swap! recording conj (state brain))))
-
-(defrecord RecordedBrain [recording state]
-  showoff.showoff.Tickable
-  (tick [brain]
-    (swap! state inc))
-
-  Brain
-  (state [brain]
-    (let [idx @state]
-      (if (< idx (.-length recording))
-       (aget recording idx)
-       #{})))
-
-  cljs.core.IHash
-  (-hash [brain]
-    (.getUid js/goog brain)))
 
 (defn add-collectable [key pos & more]
   (let [rec (*collectables* key)
@@ -444,16 +415,16 @@
 (defn player-movement [player particle brain]
   ;; motion and collision detection
   (cooldown-tick particle :jump-timer)
-  (when (state? brain :right)
+  (when (brain/state? brain :right)
     (swap! particle conj {:velocity (vec/add (particle-velocity particle)
                                              [+player-accel+ 0])}))
   
-  (when (state? brain :left)
+  (when (brain/state? brain :left)
     (swap! particle conj {:velocity (vec/add (particle-velocity particle)
                                              [(- +player-accel+) 0])}))
   (if (supported-by-map @*current-map* (to-rect player))
     ;; on the ground, check for jump
-    (when (and (is-cool? particle :jump-timer) (state? brain :up))
+    (when (and (is-cool? particle :jump-timer) (brain/state? brain :up))
       (cooldown-start particle 0.2 :jump-timer)
       (play-sound :jump)
       (swap! particle conj {:velocity [(nth (particle-velocity particle) 0)
@@ -521,28 +492,28 @@
     ;; record the last directon of motion so we can draw our sprite
     ;; facing that way
     (cond
-     (state? brain :left)
+     (brain/state? brain :left)
      (swap! particle conj {:direction :left})
 
-     (state? brain :right)
+     (brain/state? brain :right)
      (swap! particle conj {:direction :right}))
 
     ;; mark ourselves walking or not-walking for animation
-    (if (or (state? brain :left) (state? brain :right))
+    (if (or (brain/state? brain :left) (brain/state? brain :right))
       (swap! particle conj {:walking true})
       (swap! particle conj {:walking false}))
 
     ;; reset cooldown if no command keys are down
-    (when (not (or (state? brain :down) (state? brain :space)))
+    (when (not (or (brain/state? brain :down) (brain/state? brain :space)))
       (swap! particle conj {:cooldown 0}))
 
     ;; see if we're trying to use something
-    (when (and (is-cool? particle) (state? brain :space))
+    (when (and (is-cool? particle) (brain/state? brain :space))
       (use-thing (first @*bag*) player)
       (cooldown-start particle .3))
 
     ;; cycle after our cooldown is done
-    (when (and (is-cool? particle) (state? brain :down))
+    (when (and (is-cool? particle) (brain/state? brain :down))
       (reset! *bag* (conj (into [] (rest @*bag*)) (first @*bag*)))
       (cooldown-start particle .3))
     
@@ -592,7 +563,13 @@
 
 (def *player-speed* 6)
 
-(defn setup-world [callback]
+(defn get-recorded-brain []
+  (brain/RecordedBrain.
+   (apply array [{:brain #{}, :count 52} {:brain #{:up}, :count 6} {:brain #{:right :up}, :count 6} {:brain #{:right}, :count 6} {:brain #{:right :up}, :count 5} {:brain #{:right}, :count 3} {:brain #{}, :count 7} {:brain #{:left}, :count 11} {:brain #{:down :left}, :count 3} {:brain #{:left}, :count 1} {:brain #{}, :count 19} {:brain #{:right}, :count 4} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 4} {:brain #{:space}, :count 3} {:brain #{}, :count 4} {:brain #{:space}, :count 2} {:brain #{}, :count 3} {:brain #{:space}, :count 4} {:brain #{}, :count 3} {:brain #{:space}, :count 2} {:brain #{}, :count 4} {:brain #{:space}, :count 2} {:brain #{}, :count 4} {:brain #{:space}, :count 3} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 3} {:brain #{:space}, :count 2} {:brain #{}, :count 4} {:brain #{:space}, :count 3} {:brain #{}, :count 12} {:brain #{:down}, :count 4} {:brain #{}, :count 11} {:brain #{:down}, :count 3} {:brain #{}, :count 14} {:brain #{:down}, :count 4} {:brain #{}, :count 11} {:brain #{:space}, :count 1} {:brain #{:right}, :count 7} {:brain #{:right :space}, :count 3} {:brain #{:right}, :count 3} {:brain #{:right :space}, :count 3} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 3} {:brain #{:right :space}, :count 3} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 3} {:brain #{:right :space}, :count 3} {:brain #{:right}, :count 6} {:brain #{}, :count 5} {:brain #{:left}, :count 4} {:brain #{}, :count 12} {:brain #{:left}, :count 4} {:brain #{}, :count 6} {:brain #{:right}, :count 6} {:brain #{:right :up}, :count 13} {:brain #{:right}, :count 5} {:brain #{:right :up}, :count 10} {:brain #{:right}, :count 7} {:brain #{:right :up}, :count 8} {:brain #{:right}, :count 8} {:brain #{:right :up}, :count 8} {:brain #{:right}, :count 9} {:brain #{:right :up}, :count 8} {:brain #{:right}, :count 86} {:brain #{:right :up}, :count 8} {:brain #{:right}, :count 1} {:brain #{}, :count 5} {:brain #{:left}, :count 1} {:brain #{}, :count 9} {:brain #{:right}, :count 6} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{:right :space}, :count 1} {:brain #{:right}, :count 7} {:brain #{}, :count 4} {:brain #{:left}, :count 7} {:brain #{:up :left}, :count 6} {:brain #{:left}, :count 6} {:brain #{}, :count 9} {:brain #{:right}, :count 1} {:brain #{}, :count 1} {:brain #{:up}, :count 5} {:brain #{:right :up}, :count 8} {:brain #{:right}, :count 1} {:brain #{}, :count 10} {:brain #{:right}, :count 1} {:brain #{:right :up}, :count 20} {:brain #{:right}, :count 2} {:brain #{}, :count 16} {:brain #{:down}, :count 2} {:brain #{}, :count 4} {:brain #{:right}, :count 5} {:brain #{}, :count 12} {:brain #{:down}, :count 4} {:brain #{}, :count 9} {:brain #{:down}, :count 4} {:brain #{}, :count 55} {:brain #{:up}, :count 10} {:brain #{:space}, :count 4} {:brain #{}, :count 5} {:brain #{:up}, :count 8} {:brain #{}, :count 1} {:brain #{:space}, :count 4} {:brain #{}, :count 5} {:brain #{:up}, :count 9} {:brain #{}, :count 2} {:brain #{:space}, :count 4} {:brain #{}, :count 3} {:brain #{:up}, :count 8} {:brain #{}, :count 2} {:brain #{:space}, :count 4} {:brain #{}, :count 4} {:brain #{:up}, :count 8} {:brain #{}, :count 3} {:brain #{:space}, :count 4} {:brain #{}, :count 3} {:brain #{:up}, :count 8} {:brain #{}, :count 2} {:brain #{:space}, :count 3} {:brain #{}, :count 5} {:brain #{:up}, :count 8} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 5} {:brain #{:up}, :count 7} {:brain #{}, :count 3} {:brain #{:space}, :count 4} {:brain #{}, :count 3} {:brain #{:up}, :count 8} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 4} {:brain #{:up}, :count 9} {:brain #{}, :count 1} {:brain #{:space}, :count 4} {:brain #{}, :count 6} {:brain #{:up}, :count 7} {:brain #{}, :count 3} {:brain #{:space}, :count 4} {:brain #{}, :count 4} {:brain #{:up}, :count 8} {:brain #{}, :count 4} {:brain #{:space}, :count 4} {:brain #{}, :count 3} {:brain #{:up}, :count 8} {:brain #{}, :count 2} {:brain #{:space}, :count 5} {:brain #{}, :count 2} {:brain #{:up}, :count 4} {:brain #{:up :left}, :count 4} {:brain #{:left}, :count 2} {:brain #{}, :count 7} {:brain #{:left}, :count 8} {:brain #{}, :count 8} {:brain #{:right}, :count 5} {:brain #{}, :count 22} {:brain #{:down}, :count 4} {:brain #{}, :count 20} {:brain #{:left}, :count 6} {:brain #{:space :left}, :count 4} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 1} {:brain #{}, :count 4} {:brain #{:left}, :count 20} {:brain #{:up :left}, :count 21} {:brain #{:left}, :count 26} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 15} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 5} {:brain #{}, :count 2} {:brain #{:right}, :count 7} {:brain #{:right :down}, :count 4} {:brain #{:right}, :count 9} {:brain #{:right :down}, :count 4} {:brain #{:right}, :count 9} {:brain #{:right :down}, :count 3} {:brain #{:right}, :count 26} {:brain #{}, :count 8} {:brain #{:right}, :count 4} {:brain #{}, :count 7} {:brain #{:up}, :count 10} {:brain #{:space}, :count 3} {:brain #{}, :count 6} {:brain #{:up}, :count 10} {:brain #{}, :count 1} {:brain #{:space}, :count 2} {:brain #{}, :count 7} {:brain #{:up}, :count 9} {:brain #{:space :up}, :count 1} {:brain #{:space}, :count 3} {:brain #{}, :count 8} {:brain #{:up}, :count 3} {:brain #{:up :left}, :count 5} {:brain #{:left}, :count 5} {:brain #{:down :left}, :count 6} {:brain #{:left}, :count 14} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 20} {:brain #{:right}, :count 30} {:brain #{:right :up}, :count 8} {:brain #{:right}, :count 40} {:brain #{}, :count 1} {:brain #{:left}, :count 31} {:brain #{}, :count 9} {:brain #{:left}, :count 11} {:brain #{}, :count 4} {:brain #{:right}, :count 31} {:brain #{:left}, :count 60} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 6} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 4} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 5} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 37} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 9} {:brain #{}, :count 4} {:brain #{:left}, :count 4} {:brain #{}, :count 160}])
+   (atom nil)
+   (atom nil)))
+
+(defn setup-world [callback player-brain]
   (empty-bag)
   (clear-entities)
   (reset! *keys-collected* 0)
@@ -608,8 +585,9 @@
       :position [5 5]
       :velocity [0 0]
       })
-    (KeyboardBrain.)))
-  (add-entity @*current-map* *recorded-brain*)
+    player-brain))
+  (add-entity @*current-map* player-brain)
+
   
   (set!
    *viewport*
@@ -685,7 +663,7 @@
     (set! jukebox.Manager (jukebox.Manager. (clj->js mgrconfig)))
     (set! *media-player* (jukebox.Player. (clj->js sounds)))))
 
-(defn draw-world [ticks]
+(defn draw-world [ticks stable-state]
   ;; only draw if we actually ticked
   (when (> ticks 0)
     (let [ctx (gfx/context (display))
@@ -729,7 +707,7 @@
    :finished
 
    :else
-   :game))
+   stable-state))
 
 (def *base-dialog* nil)
 (def *instructions* nil)
@@ -871,12 +849,20 @@
 
    :setup-map
    {:setup with-loaded-map
-    :after-ticks (fn [] :game)}
+    :after-ticks (fn []
+                   (let [win (uri/parse (.-location js/window))]
+                     (if (> (-> win (.getQueryData) (.getCount)) 0)
+                       :recorded-game
+                       :game)))}
    
    :game
-   {:setup setup-world
-    :after-ticks draw-world}
+   {:setup #(setup-world % (brain/KeyboardBrain.))
+    :after-ticks #(draw-world % :game)}
 
+   :recorded-game
+   {:setup #(setup-world % (get-recorded-brain))
+    :after-ticks #(draw-world % :recorded-game)}
+   
    :show-score
    {:setup prepare-score-screen
     :after-ticks score-screen}
@@ -946,7 +932,7 @@
     (remove-entity @*current-map* *brain-recorder*))
   
   (let [brain (:brain *player*)
-        recorder (BrainRecorder. brain (atom []))]
+        recorder (brain/BrainRecorder. brain (atom []))]
     (add-entity @*current-map* recorder)
     (set! *brain-recorder* recorder)))
 
