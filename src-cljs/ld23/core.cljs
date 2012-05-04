@@ -8,24 +8,23 @@
                                 drag-force-generator gravity-force-generator
                                 integrate-particle spring-force
                                 apply-particle-vs-map
-                                draw-sprite
+                                draw-sprite inverse-transform
                                 draw-entities filled-rect
                                 color move-check-map-collision
                                 resize-nearest-neighbor record-vs-rect
                                 set-display-and-viewport cycle-once
                                 head-bumped-map with-loaded-font draw-text
-                                draw-text-centered stats-string fill-style
-                                format])
-        (showoff.core :only [clj->js Viewport
-                             request-animation by-id]))
+                                draw-text-centered stats-string fill-style]))
+  
   (:require [showoff.vec :as vec]
             [showoff.rect :as rect]
             [showoff.gfx :as gfx]
             [showoff.map :as map]
             [showoff.input :as input]
             [showoff.ai :as brain]
-            [goog.dom :as dom]
-            [goog.string :as string]
+            [showoff.states :as states]
+            [showoff.utils :as utils]
+            [ld23.recorded :as recorded]
             [goog.events :as gevents]
             [goog.Timer :as timer]
             [goog.events.KeyHandler :as geventskey]
@@ -54,7 +53,8 @@
 (def *debug-mode* false)
 
 (defn play-sound [key]
-  (.play *media-player* (name key)))
+  (when *media-player*
+    (.play *media-player* (name key))))
 
 (defprotocol Collectable
   (collect [c]))
@@ -95,6 +95,16 @@
   ([obj max-cooldown slot]
      (swap! obj conj {slot max-cooldown})))
 
+(defrecord Viewport [dims particle]
+  showoff.showoff.Rectable
+  (to-rect [vp]
+    (let [[w h] dims
+          [x y] (:position @particle)]
+      [x y w h])) ;; expressed in tiles
+
+  showoff.showoff.Tickable
+  (tick [vp]
+    (reset! particle (integrate-particle @particle))))
 
 (defrecord StaticCollectable [position rec]
   showoff.showoff.Rectable
@@ -136,7 +146,7 @@
     (when (not (:used rec)) (swap! *bricks-destroyed* inc))
     rec))
 
-(defrecord Jackhammer [position rec max-cooldown state]
+(defrecord Jackhammer [position rec state]
   showoff.showoff.Rectable
   (to-rect [c] (posrec->rect position rec))
 
@@ -159,7 +169,7 @@
         (play-sound :dig)
         (add-entity @*current-map* (add-collectable :rubble (map/idx->coords @*current-map* idx) (take-brick idx)))))))
 
-(defrecord Blowtorch [position rec max-cooldown state]
+(defrecord Blowtorch [position rec state]
   showoff.showoff.Rectable
   (to-rect [c] (posrec->rect position rec))
 
@@ -228,7 +238,11 @@
 
       ;; otherwise, try the direction we're facing
       (when-let [idx (map/kind-towards? @*current-map* (to-rect user) (:direction @(:particle user)) fillable?)]
-        (map/set-map-idx @*current-map* idx (conj map-rec {:used true}))))))
+        (map/set-map-idx @*current-map* idx (conj map-rec {:used true})))))
+
+  cljs.core.IHash
+  (-hash [c]
+    (.getUid js/goog c)))
 
 (defrecord Fist [rec state]
   Iconic
@@ -238,23 +252,25 @@
   (use-thing [c user] nil))
 
 (defn timer-time [timer]
-  (or (:time @(:state timer)) (:start timer)))
+  (or (:time @(:state timer)) 0))
 
-(defrecord Timer [start state]
+(defrecord Timer [state]
   showoff.showoff.Tickable
   (tick [c]
     (let [last-time (timer-time c)]
-      (swap! state conj {:time (- last-time showoff.showoff.+secs-per-tick+)})
-      (when (<= last-time 0)
-        (swap! state conj {:time 0})))))
+      (swap! state conj {:time (+ last-time showoff.showoff.+secs-per-tick+)}))))
 
 (def *game-timer* nil)
 
-(defn draw-timer [ctx timer]
-  (let [time (Math/ceil (:time @(:state timer)))
-        minutes (Math/floor (/ time 60))
-        seconds (mod time 60)]
-    (draw-text-centered ctx *hud-font* (format "%2d:%02d" minutes seconds) [55 452])))
+(defn draw-timer
+  ([ctx timer]
+     (draw-timer ctx timer [55 452]))
+
+  ([ctx timer position]
+     (let [time (Math/floor (:time @(:state timer)))
+           minutes (Math/floor (/ time 60))
+           seconds (mod time 60)]
+       (draw-text-centered ctx *hud-font* (utils/format "%2d:%02d" minutes seconds) position))))
 
 (defn fill-template [pdata [px py] sym]
   (let [src-rect [px py 16 16]
@@ -351,12 +367,12 @@
            :jackhammer
            {:image (resize-nearest-neighbor pdata [48 0 16 16] dims)
             :dims [1 1]
-            :spawn (fn [pos rec cooldown] (Jackhammer. pos rec cooldown (atom {})))}
+            :spawn (fn [pos rec] (Jackhammer. pos rec (atom {})))}
 
            :blowtorch
            {:image (resize-nearest-neighbor pdata [48 48 16 16] dims)
             :dims [1 1]
-            :spawn (fn [pos rec cooldown] (Blowtorch. pos rec cooldown (atom {})))}
+            :spawn (fn [pos rec] (Blowtorch. pos rec (atom {})))}
 
            :rubble
            {:image (resize-nearest-neighbor pdata [48 32 16 16] dims)
@@ -565,7 +581,7 @@
 
 (defn get-recorded-brain []
   (brain/RecordedBrain.
-   (apply array [{:brain #{}, :count 52} {:brain #{:up}, :count 6} {:brain #{:right :up}, :count 6} {:brain #{:right}, :count 6} {:brain #{:right :up}, :count 5} {:brain #{:right}, :count 3} {:brain #{}, :count 7} {:brain #{:left}, :count 11} {:brain #{:down :left}, :count 3} {:brain #{:left}, :count 1} {:brain #{}, :count 19} {:brain #{:right}, :count 4} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 4} {:brain #{:space}, :count 3} {:brain #{}, :count 4} {:brain #{:space}, :count 2} {:brain #{}, :count 3} {:brain #{:space}, :count 4} {:brain #{}, :count 3} {:brain #{:space}, :count 2} {:brain #{}, :count 4} {:brain #{:space}, :count 2} {:brain #{}, :count 4} {:brain #{:space}, :count 3} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 3} {:brain #{:space}, :count 2} {:brain #{}, :count 4} {:brain #{:space}, :count 3} {:brain #{}, :count 12} {:brain #{:down}, :count 4} {:brain #{}, :count 11} {:brain #{:down}, :count 3} {:brain #{}, :count 14} {:brain #{:down}, :count 4} {:brain #{}, :count 11} {:brain #{:space}, :count 1} {:brain #{:right}, :count 7} {:brain #{:right :space}, :count 3} {:brain #{:right}, :count 3} {:brain #{:right :space}, :count 3} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 3} {:brain #{:right :space}, :count 3} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 4} {:brain #{:right :space}, :count 2} {:brain #{:right}, :count 3} {:brain #{:right :space}, :count 3} {:brain #{:right}, :count 6} {:brain #{}, :count 5} {:brain #{:left}, :count 4} {:brain #{}, :count 12} {:brain #{:left}, :count 4} {:brain #{}, :count 6} {:brain #{:right}, :count 6} {:brain #{:right :up}, :count 13} {:brain #{:right}, :count 5} {:brain #{:right :up}, :count 10} {:brain #{:right}, :count 7} {:brain #{:right :up}, :count 8} {:brain #{:right}, :count 8} {:brain #{:right :up}, :count 8} {:brain #{:right}, :count 9} {:brain #{:right :up}, :count 8} {:brain #{:right}, :count 86} {:brain #{:right :up}, :count 8} {:brain #{:right}, :count 1} {:brain #{}, :count 5} {:brain #{:left}, :count 1} {:brain #{}, :count 9} {:brain #{:right}, :count 6} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{:right :space}, :count 1} {:brain #{:right}, :count 7} {:brain #{}, :count 4} {:brain #{:left}, :count 7} {:brain #{:up :left}, :count 6} {:brain #{:left}, :count 6} {:brain #{}, :count 9} {:brain #{:right}, :count 1} {:brain #{}, :count 1} {:brain #{:up}, :count 5} {:brain #{:right :up}, :count 8} {:brain #{:right}, :count 1} {:brain #{}, :count 10} {:brain #{:right}, :count 1} {:brain #{:right :up}, :count 20} {:brain #{:right}, :count 2} {:brain #{}, :count 16} {:brain #{:down}, :count 2} {:brain #{}, :count 4} {:brain #{:right}, :count 5} {:brain #{}, :count 12} {:brain #{:down}, :count 4} {:brain #{}, :count 9} {:brain #{:down}, :count 4} {:brain #{}, :count 55} {:brain #{:up}, :count 10} {:brain #{:space}, :count 4} {:brain #{}, :count 5} {:brain #{:up}, :count 8} {:brain #{}, :count 1} {:brain #{:space}, :count 4} {:brain #{}, :count 5} {:brain #{:up}, :count 9} {:brain #{}, :count 2} {:brain #{:space}, :count 4} {:brain #{}, :count 3} {:brain #{:up}, :count 8} {:brain #{}, :count 2} {:brain #{:space}, :count 4} {:brain #{}, :count 4} {:brain #{:up}, :count 8} {:brain #{}, :count 3} {:brain #{:space}, :count 4} {:brain #{}, :count 3} {:brain #{:up}, :count 8} {:brain #{}, :count 2} {:brain #{:space}, :count 3} {:brain #{}, :count 5} {:brain #{:up}, :count 8} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 5} {:brain #{:up}, :count 7} {:brain #{}, :count 3} {:brain #{:space}, :count 4} {:brain #{}, :count 3} {:brain #{:up}, :count 8} {:brain #{}, :count 3} {:brain #{:space}, :count 3} {:brain #{}, :count 4} {:brain #{:up}, :count 9} {:brain #{}, :count 1} {:brain #{:space}, :count 4} {:brain #{}, :count 6} {:brain #{:up}, :count 7} {:brain #{}, :count 3} {:brain #{:space}, :count 4} {:brain #{}, :count 4} {:brain #{:up}, :count 8} {:brain #{}, :count 4} {:brain #{:space}, :count 4} {:brain #{}, :count 3} {:brain #{:up}, :count 8} {:brain #{}, :count 2} {:brain #{:space}, :count 5} {:brain #{}, :count 2} {:brain #{:up}, :count 4} {:brain #{:up :left}, :count 4} {:brain #{:left}, :count 2} {:brain #{}, :count 7} {:brain #{:left}, :count 8} {:brain #{}, :count 8} {:brain #{:right}, :count 5} {:brain #{}, :count 22} {:brain #{:down}, :count 4} {:brain #{}, :count 20} {:brain #{:left}, :count 6} {:brain #{:space :left}, :count 4} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 1} {:brain #{}, :count 4} {:brain #{:left}, :count 20} {:brain #{:up :left}, :count 21} {:brain #{:left}, :count 26} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 15} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 5} {:brain #{}, :count 2} {:brain #{:right}, :count 7} {:brain #{:right :down}, :count 4} {:brain #{:right}, :count 9} {:brain #{:right :down}, :count 4} {:brain #{:right}, :count 9} {:brain #{:right :down}, :count 3} {:brain #{:right}, :count 26} {:brain #{}, :count 8} {:brain #{:right}, :count 4} {:brain #{}, :count 7} {:brain #{:up}, :count 10} {:brain #{:space}, :count 3} {:brain #{}, :count 6} {:brain #{:up}, :count 10} {:brain #{}, :count 1} {:brain #{:space}, :count 2} {:brain #{}, :count 7} {:brain #{:up}, :count 9} {:brain #{:space :up}, :count 1} {:brain #{:space}, :count 3} {:brain #{}, :count 8} {:brain #{:up}, :count 3} {:brain #{:up :left}, :count 5} {:brain #{:left}, :count 5} {:brain #{:down :left}, :count 6} {:brain #{:left}, :count 14} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 20} {:brain #{:right}, :count 30} {:brain #{:right :up}, :count 8} {:brain #{:right}, :count 40} {:brain #{}, :count 1} {:brain #{:left}, :count 31} {:brain #{}, :count 9} {:brain #{:left}, :count 11} {:brain #{}, :count 4} {:brain #{:right}, :count 31} {:brain #{:left}, :count 60} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 6} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 4} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 5} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 37} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 4} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 3} {:brain #{:left}, :count 3} {:brain #{:space :left}, :count 2} {:brain #{:left}, :count 9} {:brain #{}, :count 4} {:brain #{:left}, :count 4} {:brain #{}, :count 160}])
+   (apply array recorded/+quick-run+)
    (atom nil)
    (atom nil)))
 
@@ -615,15 +631,15 @@
 
   (set-display-and-viewport *canvas* [640 480] #(to-rect *viewport*))
   
-  (add-collectable :jackhammer [9 5] 0.3)
-  (add-collectable :blowtorch [5 22] 0.3)
+  (add-collectable :jackhammer [9 5])
+  (add-collectable :blowtorch [5 22])
   (add-keys [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49] [22 29]])
 
   (add-entity @*current-map* *viewport*)
   (add-entity @*current-map* *player*)
   (add-entity @*current-map* (Bag. *bag*))
   
-  (set! *game-timer* (Timer. (* 2 60) (atom {})))
+  (set! *game-timer* (Timer. (atom {})))
   (add-entity @*current-map* *game-timer*)
   (reset-tick-clock)
   
@@ -660,8 +676,8 @@
                  sounds)
         
         mgrconfig {"useGameLoop" true}]
-    (set! jukebox.Manager (jukebox.Manager. (clj->js mgrconfig)))
-    (set! *media-player* (jukebox.Player. (clj->js sounds)))))
+    (set! jukebox.Manager (jukebox.Manager. (utils/clj->js mgrconfig)))
+    (set! *media-player* (jukebox.Player. (utils/clj->js sounds)))))
 
 (defn draw-world [ticks stable-state]
   ;; only draw if we actually ticked
@@ -696,13 +712,10 @@
       (draw-timer ctx *game-timer*)))
 
   (when *debug-mode*
-   (set! (.-innerHTML (by-id "console")) (pr-str (input/state))))
+   (set! (.-innerHTML (utils/by-id "console")) (pr-str (input/state))))
 
   ;; next state
   (cond
-   (= (timer-time *game-timer*) 0)
-   :show-score
-
    (= @*keys-collected* @*total-keys*)
    :finished
 
@@ -802,9 +815,9 @@
     (.drawImage ctx *base-dialog* 0 0)
     (draw-text-centered ctx *hud-font* "Time is Up!" [320 100])
     (.drawImage ctx key-img 216 150)
-    (draw-text ctx *hud-font* (format "%d of %d" @*keys-collected* @*total-keys*) [264 158])
+    (draw-text ctx *hud-font* (utils/format "%d of %d" @*keys-collected* @*total-keys*) [264 158])
     (.drawImage ctx *money-icon* 216 182)
-    (draw-text ctx *hud-font* (format "$%d" (* 1000 @*bricks-destroyed*)) [264 190])
+    (draw-text ctx *hud-font* (utils/format "$%d" (* 1000 @*bricks-destroyed*)) [264 190])
     (draw-text ctx *hud-font* "of damage done" [264 222])
 
     (draw-text ctx *hud-font* "Press a Key" [264 286]))
@@ -825,9 +838,9 @@
     (.drawImage ctx *base-dialog* 0 0)
     (draw-text-centered ctx *hud-font* "Amazing!!" [320 100])
     (.drawImage ctx key-img 216 150)
-    (draw-text ctx *hud-font* (format "All %d found" @*total-keys*) [264 158])
+    (draw-text ctx *hud-font* (utils/format "All %d found" @*total-keys*) [264 158])
     (.drawImage ctx *money-icon* 216 182)
-    (draw-text ctx *hud-font* (format "$%d" (* 1000 @*bricks-destroyed*)) [264 190])
+    (draw-text ctx *hud-font* (utils/format "$%d" (* 1000 @*bricks-destroyed*)) [264 190])
     (draw-text ctx *hud-font* "of damage done" [264 222])
     
     (draw-text ctx *hud-font* "Press a Key" [264 286]))
@@ -837,6 +850,13 @@
   (if (and (is-cool? *scorescreen-cooldown*) (any-keys-pressed?))
     :setup-map
     :finished))
+
+(defn window-params []
+  (let [qdata (-> (uri/parse (.-location js/window))
+                  (.getQueryData))
+        qkeys (.getKeys qdata)
+        qvals (map #(.get qdata %) qkeys)]
+    (zipmap qkeys qvals)))
 
 (def *game-states*
   {:start
@@ -850,10 +870,9 @@
    :setup-map
    {:setup with-loaded-map
     :after-ticks (fn []
-                   (let [win (uri/parse (.-location js/window))]
-                     (if (> (-> win (.getQueryData) (.getCount)) 0)
-                       :recorded-game
-                       :game)))}
+                   (if (> (count (window-params)) 0)
+                     :recorded-game
+                     :game))}
    
    :game
    {:setup #(setup-world % (brain/KeyboardBrain.))
@@ -872,58 +891,133 @@
     :after-ticks finished-screen}
    })
 
-(def *current-game-state* (atom nil))
-
-(defn perform-after-ticks [ticks]
-  (let [after-ticks (:after-ticks (@*current-game-state* *game-states*))]
-    (after-ticks ticks)))
-
-(defn with-changed-game-state [new-state callback]
-  (let [change-complete (fn []
-                          (reset! *current-game-state* new-state)
-                          (callback))]
-    (if (not (= @*current-game-state* new-state))
-      ;; actually changing state
-      (if-let [setup (:setup (new-state *game-states*))]
-        ;; we have a setup function, run and finish the state change
-        ;; when it's done
-        (setup change-complete)
-        ;; no setup function
-        (change-complete))
-      
-      ;; not really changing state so we don't look for a setup function
-      (change-complete))))
-
-
-(defn game-loop []
-  ;; give the sound system a chance to run
-  (.loop jukebox.Manager)
-  
-  (if (= @*current-game-state* nil)
-    ;; set the state to start
-    (with-changed-game-state :start
-      (fn []
-        (perform-after-ticks 0)
-        (request-animation game-loop (display))))
-
-    ;; otherwise, perform in our current state
-    (let [next-state (cycle-once perform-after-ticks)]
-      (with-changed-game-state next-state
-        (fn []
-          (request-animation game-loop (display)))))))
-
 (defn ^:export game []
   (let [screen-size [640 480]
         canvas (gfx/make-canvas screen-size)]
     
-    (dom/appendChild (by-id "content") canvas)
+    (utils/append-child (utils/by-id "content") canvas)
     (set! *canvas* canvas)
     (set-display-and-viewport *canvas* [640 480] #(vector 0 0 20 15))
     
     (input/prepare input/standard-remapper)
     (prepare-sound)
     
-    (game-loop)))
+    (states/game-loop *game-states* #(.loop jukebox.Manager))))
+
+(def *current-tool* (atom nil))
+
+(defn select-tool [tool-kind tool-div]
+  (when @*current-tool*
+    (utils/remove-class (:div @*current-tool*) "tool-selected"))
+
+  (utils/set-class tool-div "tool-selected")
+  (reset! *current-tool* {:div tool-div :kind tool-kind}))
+
+(defn- add-tool [kind]
+  (let [rec (*collectables* kind)
+        box (utils/by-id "tools")
+        tool (utils/div-with-class "tool" (:image rec))]
+    (utils/append-child box tool)
+    (gevents/listen tool "click" #(select-tool kind tool))))
+
+(defrecord EditorViewport [pos brain]
+  showoff.showoff.Rectable
+  (to-rect [view]
+    (let [[x y] @pos]
+      [x y 20 15]))
+
+  showoff.showoff.Tickable
+  (tick [view]
+    (when (brain/state? brain :left)
+      (let [[x y] @pos]
+        (reset! pos [(dec x) y])))
+
+    (when (brain/state? brain :right)
+      (let [[x y] @pos]
+        (reset! pos [(inc x) y])))
+
+    (when (brain/state? brain :up)
+      (let [[x y] @pos]
+        (reset! pos [x (dec y)])))
+
+    (when (brain/state? brain :down)
+      (let [[x y] @pos]
+        (reset! pos [x (inc y)])))))
+
+(def *mouse-position* [0 0])
+
+(defn editor-mousemoved [ge]
+  (let [x (.-offsetX ge)
+        y (.-offsetY ge)]
+    
+    (set! *mouse-position* [x y])))
+
+(defn mouse-position []
+  (let [[mx my] (inverse-transform *mouse-position*)]
+    [(Math/floor mx) (Math/floor my)]))
+
+(defn editor-mouseclicked [ge]
+  (when-let [tool @*current-tool*]
+    (when (not (= (:kind tool) :fist))
+      (add-collectable (:kind tool) (mouse-position)))))
+
+(defn setup-editor [callback]
+  (add-tool :jackhammer)
+  (add-tool :blowtorch)
+  (add-tool :key)
+  (add-tool :fist)
+
+  (let [viewport (EditorViewport. (atom [0 0]) (brain/KeyboardBrain.))]
+    (set-display-and-viewport *canvas* [640 480] #(to-rect viewport))
+    (add-entity @*current-map* viewport))
+
+  (let [disp (display)]
+    (gevents/listen disp "mousemove" editor-mousemoved)
+    (gevents/listen disp "click" editor-mouseclicked))
+  (callback))
+
+(defn draw-editor [ticks]
+  (let [disp (display)
+        ctx (gfx/context disp)
+        tool-kind (if @*current-tool*
+                   (:kind @*current-tool*)
+                   :fist)
+        tool-rec (*collectables* tool-kind)]
+    
+    (gfx/clear disp)
+    (map/draw ctx @*current-map* (viewport-rect)
+              showoff.showoff.*tile-in-world-dims*)
+
+    (draw-sprite ctx (:image tool-rec) (mouse-position))
+    (draw-entities ctx)
+    
+    :editor))
+
+(def *editor-states*
+  {:start
+   {:setup once-only-setup
+    :after-ticks (fn [] :setup-map)}
+
+   :setup-map
+   {:setup with-loaded-map
+    :after-ticks (fn [] :editor)}
+   
+   :editor
+   {:setup setup-editor
+    :after-ticks draw-editor}
+   })
+
+(defn ^:export map-editor []
+  (let [screen-size [640 480]
+        canvas (gfx/make-canvas screen-size)]
+    
+    (utils/append-child (utils/by-id "content") canvas)
+    (set! *canvas* canvas)
+    (set-display-and-viewport *canvas* [640 480] #(vector 0 0 20 15))
+    
+    (input/prepare input/standard-remapper)
+    
+    (states/game-loop *editor-states* identity)))
 
 (def *brain-recorder* nil)
 

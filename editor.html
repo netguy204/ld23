@@ -1,0 +1,40 @@
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+  <head>
+    <script src="jukebox/src/Player.js"></script>
+    <script src="jukebox/src/Manager.js"></script>
+
+    <script src="closure/goog/base.js"></script>
+    <script src="javascripts/main.js"></script>
+
+    <style type="text/css" media="screen">
+      .tool {
+          width: 32px;
+          height: 32px;
+          background: #fff;
+          display:inline;
+      }
+
+      .tool:hover {
+          background: #bbb;
+      }
+
+      .tool-selected {
+          background: #bbf;
+          display:inline;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="content">
+    </div>
+
+    <div id="tools" class="tools"></div>
+    <script language="javascript">
+      ld23.core.map_editor();
+    </script>
+
+    <div id="console">
+    </div>
+  </body>
+</html>
