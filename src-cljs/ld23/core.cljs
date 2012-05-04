@@ -958,7 +958,14 @@
 
 (defn editor-mouseclicked [ge]
   (when-let [tool @*current-tool*]
-    (when (not (= (:kind tool) :fist))
+    (if (= (:kind tool) :fist)
+      ;; erase anything here
+      (let [[mx my] (mouse-position)]
+        (map/with-objects-in-rect @*current-map* [mx my 1 1]
+          (fn [obj]
+            (remove-entity @*current-map* obj))))
+      
+      ;; drop a new tool here
       (add-collectable (:kind tool) (mouse-position)))))
 
 (defn setup-editor [callback]
@@ -988,8 +995,8 @@
     (map/draw ctx @*current-map* (viewport-rect)
               showoff.showoff.*tile-in-world-dims*)
 
-    (draw-sprite ctx (:image tool-rec) (mouse-position))
     (draw-entities ctx)
+    (draw-sprite ctx (:image tool-rec) (mouse-position))
     
     :editor))
 
