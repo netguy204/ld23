@@ -38,7 +38,6 @@
 (def *hud-font* nil)
 (def *font-chars* "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"?!./:$")
 (def *base-dialog* nil)
-(def *instructions* nil)
 
 (def *player* nil)
 
@@ -70,9 +69,18 @@
 (defprotocol Iconic
   (icon [obj]))
 
+(defn spawn-item
+  ([key]
+     (spawn-item key [0 0]))
+  
+  ([key pos & more]
+     (let [rec (*collectables* key)]
+       (conj
+        (apply (:spawn rec) pos rec more)
+        {:key key}))))
+
 (defn add-collectable [key pos & more]
-  (let [rec (*collectables* key)
-        coll (apply (:spawn rec) pos rec more)]
+  (let [coll (apply spawn-item key pos more)]
     (add-entity @*current-map* coll)
     (swap! *kind-totals* conj {key (inc (kind-total key))})))
 
@@ -137,7 +145,20 @@
   (tick [b] (doseq [item @contents]
               (tick item))))
 
-(defn add-to-bag [item]
+(defn item-key [e]
+  "spawn-item makes sure that this is a valid key on any spawned
+thing"
+  (:key e))
+
+(defn item-spec [e]
+  (*collectables* (item-key e)))
+
+(defn bag-behavior [e]
+  (:bag-behavior (item-spec e)))
+
+(defmulti add-to-bag bag-behavior)
+
+(defmethod add-to-bag nil [item]
   (swap! *bag* conj item))
 
 (defn remove-from-bag [item]
@@ -218,10 +239,12 @@
     (when (empty? @contents)
       (remove-from-bag c))))
 
-(defn add-with-stacking [item kind rec]
-  (if-let [stack (first (filter #(= (:kind %) kind) @*bag*))]
-    (swap! (:contents stack) conj item)
-    (swap! *bag* conj (ConsumableStack. kind rec (atom [item])))))
+(defmethod add-to-bag :stack [item]
+  (let [key (item-key item)
+        spec (item-spec item)]
+    (if-let [stack (first (filter #(= (:kind %) key) @*bag*))]
+      (swap! (:contents stack) conj item)
+      (swap! *bag* conj (ConsumableStack. key spec (atom [item]))))))
 
 (defrecord Rubble [position rec map-rec]
   showoff.showoff.Rectable
@@ -236,7 +259,7 @@
   Collectable
   (collect [c]
     (remove-entity @*current-map* c)
-    (add-with-stacking c :rubble rec))
+    (add-to-bag c))
 
   Useable
   (use-thing [c user]
@@ -397,14 +420,40 @@
              :dims [0.7 0.8]
              :spawn (fn
                       ([pos rec] (Rubble. pos rec (*symbols* [255 0 255])))
-                      ([pos rec map-rec] (Rubble. pos rec map-rec)))}
+                      ([pos rec map-rec] (Rubble. pos rec map-rec)))
+             :bag-behavior :stack}
 
             ;; not really collectable... that would be weird.
             :fist
             {:image [3 1]
              :dims [1 1]
-             :span (fn [pos rec] (Fist. rec))}}))
+             :spawn (fn [pos rec] (Fist. rec))}}))
     ))
+
+(def *level-definition*
+  {:player [5 5]
+   :items
+   {:jackhammer [[9 5]]
+    :blowtorch [[5 22]]
+    :key [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49] [22 29]]
+    }
+   :map "graphics/world2.gif"
+   :backdrop "graphics/backdrop.png"
+   :initial-bag [:jackhammer :blowtorch :fist :rubble :rubble :rubble :rubble]
+   })
+
+(defn with-level-assets [level callback]
+  (utils/with-loaded-assets
+    {:map
+     (utils/curry gfx/with-img (level :map))
+
+     :backdrop
+     (utils/curry gfx/with-img (level :backdrop))}
+
+    (fn [assets]
+      (reset! *current-map* (map/load (:map assets) *symbols*))
+      (set! *backdrop* (:backdrop assets))
+      (callback))))
 
 (defn with-prepared-assets [callback]
   (utils/with-loaded-assets
@@ -417,27 +466,16 @@
      :sprites
      (utils/curry gfx/with-img "graphics/sprites.png")
 
-     :map
-     (utils/curry gfx/with-img "graphics/world2.gif")
-
      :dialog
      (utils/curry gfx/with-img "graphics/dialog.png")
 
-     :instructions
-     (utils/curry gfx/with-img "graphics/instructions.png")
-
-     :backdrop
-     (utils/curry gfx/with-img "graphics/backdrop.png")
      }
 
     (fn [assets]
       (set! *hud-font* (:font assets))
       (set! *hud* (gfx/resize-nearest-neighbor (gfx/get-pixel-data (:hud assets)) [640 480]))
       (set! *base-dialog* (gfx/resize-nearest-neighbor (gfx/get-pixel-data (:dialog assets)) [640 480]))
-      (set! *instructions* (gfx/resize-nearest-neighbor (gfx/get-pixel-data (:instructions assets)) [648 480]))
       (setup-symbols (:sprites assets))
-      (reset! *current-map* (map/load (:map assets) *symbols*))
-      (set! *backdrop* (:backdrop assets))
       (callback))))
 
 (extend-type js/HTMLCanvasElement
@@ -611,34 +649,32 @@
    (atom nil)
    (atom nil)))
 
-(def *level-definition*
-  {:player [5 5]
-   :items
-   {:jackhammer [[9 5]]
-    :blowtorch [[5 22]]
-    :key [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49] [22 29]]
-    }
-   })
+(defn add-level-items [level]
+  (doseq [[kind instances] (level :items)]
+    (doseq [inst instances]
+      (add-collectable kind inst)))
 
-(defn setup-world [callback player-brain]
+  ;; fill our bag
+  (reset! *bag* [])
+  (doseq [item (level :initial-bag)]
+    (add-to-bag (spawn-item item))))
+
+(defn setup-world [level player-brain callback]
   (empty-bag)
   (clear-entities)
   (reset! *keys-collected* 0)
   (reset! *bricks-destroyed* 0)
   
-  (swap! *bag* conj (Fist. (:fist *collectables*)))
-
   (set!
    *player*
    (Player.
     (atom
      {:mass 5
-      :position (*level-definition* :player)
+      :position (level :player)
       :velocity [0 0]
       })
     player-brain))
   (add-entity @*current-map* player-brain)
-
   
   (set!
    *viewport*
@@ -646,7 +682,7 @@
     [20 15]
     (atom
      {:mass 1
-      :position [5 5]
+      :position (level :player)
       :velocity [0 0]
       
       ;; try to keep the player character basically centered
@@ -666,9 +702,7 @@
 
   (set-display-and-viewport *canvas* [640 480] #(to-rect *viewport*))
 
-  (doseq [[kind instances] (*level-definition* :items)]
-    (doseq [inst instances]
-      (add-collectable kind inst)))
+  (add-level-items level)
 
   (add-entity @*current-map* *viewport*)
   (add-entity @*current-map* *player*)
@@ -758,92 +792,10 @@
    stable-state))
 
 
-(def *instruction-time* (atom nil))
-
-(def +total-instruction-time+ 30)
-
-(defn prepare-instructions [callback]
-  (reset! *instruction-time* +total-instruction-time+)
-  (set-display-and-viewport *canvas* [640 480] #(vector 0 0 20 15))
-  (reset-tick-clock)
-  (callback))
-
 (defn any-keys-pressed? []
   (not (empty? (input/state))))
 
-(defn instructions-screen [ticks]
-  (let [ctx (gfx/context (display))]
-    (let [factor (/ @*instruction-time* +total-instruction-time+)
-          v (* 2 Math/PI 3 factor)
-          xoff (Math/sin v)
-          hopv (- (/ (mod factor 0.03) 0.03) 0.5)
-          yoff (- (* hopv hopv 2))
-          dir (if (< (Math/cos v) 0)
-                :right
-                :left)]
-      ;; just the backdrop
-      (.drawImage ctx *backdrop* (- (* factor 600)) 0)
-      
-      ;; dialog
-      (.drawImage ctx *base-dialog* 0 0)
-      
-      ;; instructions icons
-      (.drawImage ctx *instructions* 0 0)
-
-      ;; left/right character
-      ;(draw-player ctx [(+ 9 xoff) 1.5] dir)
-
-      ;; up/down character
-      ;(draw-player ctx [15 (- 1.1 yoff)] :right)
-
-      
-      (let [item-number (Math/floor (* (/ (mod factor 0.1) 0.1) 3))
-            item-key ([:jackhammer :blowtorch :rubble] item-number)
-            item-img (:image (*collectables* item-key))]
-
-        ;; the icon in the bar
-        (.drawImage ctx item-img (* 2 99) (* 2 79))
-
-        ;; the player holding the icon
-        (.drawImage ctx item-img (* 2 238) (* 2 80))
-        ;(draw-player ctx [16 5] :left)
-
-        ))
-    
-    (reset! *instruction-time*
-            (- @*instruction-time*
-               (* ticks showoff.showoff.+secs-per-tick+)))
-    
-    (if (or (<= @*instruction-time* 0)
-            (any-keys-pressed?))
-      :start
-      :instructions)))
-
 (def *scorescreen-cooldown* (atom {}))
-
-(defn prepare-score-screen [callback]
-  (cooldown-start *scorescreen-cooldown* 1)
-  (callback))
-
-(defn score-screen [ticks]
-  ;; don't clear, leave whatever used to be on the screen
-  (let [ctx (gfx/context (display))
-        key-img (:image (:key *collectables*))]
-    (.drawImage ctx *base-dialog* 0 0)
-    (draw-text-centered ctx *hud-font* "Time is Up!" [320 100])
-    (.drawImage ctx key-img 216 150)
-    (draw-text ctx *hud-font* (utils/format "%d of %d" @*keys-collected* (kind-total :key)) [264 158])
-    (.drawImage ctx *money-icon* 216 182)
-    (draw-text ctx *hud-font* (utils/format "$%d" (* 1000 @*bricks-destroyed*)) [264 190])
-    (draw-text ctx *hud-font* "of damage done" [264 222])
-
-    (draw-text ctx *hud-font* "Press a Key" [264 286]))
-  
-  (cooldown-tick *scorescreen-cooldown*)
-  
-  (if (and (is-cool? *scorescreen-cooldown*) (any-keys-pressed?))
-    :start
-    :show-score))
 
 (defn prepare-finished-screen [callback]
   (cooldown-start *scorescreen-cooldown* 1)
@@ -865,7 +817,7 @@
   (cooldown-tick *scorescreen-cooldown*)
   
   (if (and (is-cool? *scorescreen-cooldown*) (any-keys-pressed?))
-    :start
+    :load-level
     :finished))
 
 (defn window-params []
@@ -878,23 +830,23 @@
 (def *game-states*
   {:start
    {:setup with-prepared-assets
+    :after-ticks (fn [] :load-level)}
+
+   :load-level
+   {:setup (utils/curry with-level-assets *level-definition*)
     :after-ticks (fn []
                    (if (> (count (window-params)) 0)
                      :recorded-game
                      :game))}
    
    :game
-   {:setup #(setup-world % (brain/KeyboardBrain.))
+   {:setup (utils/curry setup-world *level-definition* (brain/KeyboardBrain.))
     :after-ticks #(draw-world % :game)}
 
    :recorded-game
-   {:setup #(setup-world % (get-recorded-brain))
+   {:setup (utils/curry setup-world *level-definition* (get-recorded-brain))
     :after-ticks #(draw-world % :recorded-game)}
    
-   :show-score
-   {:setup prepare-score-screen
-    :after-ticks score-screen}
-
    :finished
    {:setup prepare-finished-screen
     :after-ticks finished-screen}
@@ -1010,8 +962,12 @@
 (def *editor-states*
   {:start
    {:setup with-prepared-assets
-    :after-ticks (fn [] :editor)}
+    :after-ticks (fn [] :load-level)}
 
+   :load-level
+   {:setup (utils/curry with-level-assets *level-definition*)
+    :after-ticks (fn [] :editor)}
+   
    :editor
    {:setup setup-editor
     :after-ticks draw-editor}
