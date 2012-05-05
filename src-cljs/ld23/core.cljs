@@ -11,7 +11,7 @@
                                 draw-sprite inverse-transform
                                 draw-entities filled-rect
                                 color move-check-map-collision
-                                resize-nearest-neighbor record-vs-rect
+                                record-vs-rect
                                 set-display-and-viewport cycle-once
                                 head-bumped-map with-loaded-font draw-text
                                 draw-text-centered stats-string fill-style]))
@@ -254,7 +254,7 @@
   (-hash [c]
     (.getUid js/goog c)))
 
-(defrecord Fist [rec state]
+(defrecord Fist [rec]
   Iconic
   (icon [c] (:image rec))
 
@@ -318,84 +318,92 @@
 (defn setup-symbols [sprites]
   (let [dims showoff.showoff.*tile-in-world-dims*
         pdata (gfx/get-pixel-data sprites)
-        base-symbols {[255 255 255]
-                      {:kind :skip}
-      
-                      [0 0 0]
-                      {:kind :image
-                       :image (resize-nearest-neighbor pdata [0 16 16 16] dims)
-                       :collidable true
-                       :shape :rect}
+        base-symbols (gfx/slice-sprites
+                      pdata
+                      {[255 255 255]
+                       {:kind :skip}
+                       
+                       [0 0 0]
+                       {:kind :image
+                        :image [0 1]
+                        :collidable true
+                        :shape :rect}
 
-                      [0 255 0]
-                      {:kind :image
-                       :image (resize-nearest-neighbor pdata [0 32 16 16] dims)
-                       :collidable true
-                       :breakable true
-                       :shape :rect}
+                       [0 255 0]
+                       {:kind :image
+                        :image [0 2]
+                        :collidable true
+                        :breakable true
+                        :shape :rect}
                       
-                      [102 102 102]
-                      {:kind :image
-                       :image (resize-nearest-neighbor pdata [16 32 16 16] dims)
-                       :collidable true
-                       :breakable true
-                       :shape :rect}
+                       [102 102 102]
+                       {:kind :image
+                        :image [1 2]
+                        :collidable true
+                        :breakable true
+                        :shape :rect}
                       
-                      [204 204 204]
-                      {:kind :image
-                       :image (resize-nearest-neighbor pdata [16 16 16 16] dims)
-                       :collidable true
-                       :breakable true
-                       :shape :rect}
+                       [204 204 204]
+                       {:kind :image
+                        :image [1 1]
+                        :collidable true
+                        :breakable true
+                        :shape :rect}
                       
-                      [0 0 255]
-                      {:kind :image
-                       :image (resize-nearest-neighbor pdata [32 32 16 16] dims)
-                       :collidable false}
+                       [0 0 255]
+                       {:kind :image
+                        :image [2 2]
+                        :collidable false}
                       
-                      }]
+                       })]
     
     (set! *symbols* (make-symbol-generator base-symbols pdata 3 [0 48]))
 
     (set! *player-sprite*
-          {:left (resize-nearest-neighbor pdata [0 0 16 16] dims)
-           :right (resize-nearest-neighbor pdata [16 0 16 16] dims)
-           :right-walk1 (resize-nearest-neighbor pdata [0 64 16 16] dims)
-           :right-walk2 (resize-nearest-neighbor pdata [16 64 16 16] dims)
-           :left-walk1 (resize-nearest-neighbor pdata [32 64 16 16] dims)
-           :left-walk2 (resize-nearest-neighbor pdata [48 64 16 16] dims)
-           :fall-right (resize-nearest-neighbor pdata [64 16 16 16] dims)
-           :fall-left (resize-nearest-neighbor pdata [64 32 16 16] dims)})
+          (gfx/slice-sprites
+           pdata
+           {:left {:image [0 0]}
+            :right {:image [1 0]}
+            :right-walk1 {:image [0 4]}
+            :right-walk2 {:image [1 4]}
+            :left-walk1 {:image [2 4]}
+            :left-walk2 {:image [3 4]}
+            :fall-right {:image [4 1]}
+            :fall-left {:image [4 2]}}))
 
-    (set! *money-icon* (resize-nearest-neighbor pdata [64 0 16 16] dims))
+    (set! *money-icon* (gfx/resize-nearest-neighbor pdata [64 0 16 16] dims))
     
     (set! *collectables*
-          {:key
-           {:image (resize-nearest-neighbor pdata [32 0 16 16] dims)
-            :dims [1 1]
-            :spawn (fn [pos rec] (StaticCollectable. pos rec))
-            }
+          (gfx/slice-sprites
+           pdata
+           {:key
+            {:image [2 0]
+             :dims [1 1]
+             :spawn (fn [pos rec] (StaticCollectable. pos rec))
+             }
            
-           :jackhammer
-           {:image (resize-nearest-neighbor pdata [48 0 16 16] dims)
-            :dims [1 1]
-            :spawn (fn [pos rec] (Jackhammer. pos rec (atom {})))}
+            :jackhammer
+            {:image [3 0]
+             :dims [1 1]
+             :spawn (fn [pos rec] (Jackhammer. pos rec (atom {})))}
 
-           :blowtorch
-           {:image (resize-nearest-neighbor pdata [48 48 16 16] dims)
-            :dims [1 1]
-            :spawn (fn [pos rec] (Blowtorch. pos rec (atom {})))}
+            :blowtorch
+            {:image [3 3]
+             :dims [1 1]
+             :spawn (fn [pos rec] (Blowtorch. pos rec (atom {})))}
 
-           :rubble
-           {:image (resize-nearest-neighbor pdata [48 32 16 16] dims)
-            :dims [0.7 0.8]
-            :spawn (fn [pos rec map-rec] (Rubble. pos rec map-rec))}
+            :rubble
+            {:image [3 2]
+             :dims [0.7 0.8]
+             :spawn (fn
+                      ([pos rec] (Rubble. pos rec (*symbols* [255 0 255])))
+                      ([pos rec map-rec] (Rubble. pos rec map-rec)))}
 
-           ;; not really collectable... that would be weird.
-           :fist
-           {:image (resize-nearest-neighbor pdata [48 16 16 16] dims)
-            :dims [1 1]}
-           })
+            ;; not really collectable... that would be weird.
+            :fist
+            {:image [3 1]
+             :dims [1 1]
+             :span (fn [pos rec] (Fist. rec))}}))
     ))
 
 (defn with-prepared-assets [callback]
@@ -424,9 +432,9 @@
 
     (fn [assets]
       (set! *hud-font* (:font assets))
-      (set! *hud* (resize-nearest-neighbor (gfx/get-pixel-data (:hud assets)) [640 480]))
-      (set! *base-dialog* (resize-nearest-neighbor (gfx/get-pixel-data (:dialog assets)) [640 480]))
-      (set! *instructions* (resize-nearest-neighbor (gfx/get-pixel-data (:instructions assets)) [648 480]))
+      (set! *hud* (gfx/resize-nearest-neighbor (gfx/get-pixel-data (:hud assets)) [640 480]))
+      (set! *base-dialog* (gfx/resize-nearest-neighbor (gfx/get-pixel-data (:dialog assets)) [640 480]))
+      (set! *instructions* (gfx/resize-nearest-neighbor (gfx/get-pixel-data (:instructions assets)) [648 480]))
       (setup-symbols (:sprites assets))
       (reset! *current-map* (map/load (:map assets) *symbols*))
       (set! *backdrop* (:backdrop assets))
@@ -588,7 +596,7 @@
                     :else
                     direction)
         sprite (*player-sprite* sprite-key)]
-    (draw-sprite ctx sprite (:position particle))))
+    (draw-sprite ctx (:image sprite) (:position particle))))
 
 
 (def +viewport-spring-constant+ 60)
@@ -618,7 +626,7 @@
   (reset! *keys-collected* 0)
   (reset! *bricks-destroyed* 0)
   
-  (swap! *bag* conj (Fist. (:fist *collectables*) (atom {})))
+  (swap! *bag* conj (Fist. (:fist *collectables*)))
 
   (set!
    *player*
@@ -970,10 +978,8 @@
       (add-collectable (:kind tool) (mouse-position)))))
 
 (defn setup-editor [callback]
-  (add-tool :jackhammer)
-  (add-tool :blowtorch)
-  (add-tool :key)
-  (add-tool :fist)
+  (doseq [tool (keys *collectables*)]
+    (add-tool tool))
 
   (let [viewport (EditorViewport. (atom [0 0]) (brain/KeyboardBrain.))]
     (set-display-and-viewport *canvas* [640 480] #(to-rect viewport))
