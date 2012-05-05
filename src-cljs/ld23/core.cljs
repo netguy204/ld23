@@ -37,10 +37,12 @@
 
 (def *hud-font* nil)
 (def *font-chars* "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"?!./:$")
+(def *base-dialog* nil)
+(def *instructions* nil)
 
 (def *player* nil)
 
-(def *backdrop* (gfx/get-img (str "graphics/backdrop.png")))
+(def *backdrop* nil)
 (def *player-sprite* nil)
 (def *money-icon* nil)
 (def *hud* nil)
@@ -48,9 +50,12 @@
 (def *bag* (atom []))
 (def *media-player* nil)
 (def *keys-collected* (atom 0))
-(def *total-keys* (atom 0))
+(def *kind-totals* (atom {}))
 (def *bricks-destroyed* (atom 0))
 (def *debug-mode* false)
+
+(defn kind-total [kind]
+  (or (kind @*kind-totals*) 0))
 
 (defn play-sound [key]
   (when *media-player*
@@ -68,7 +73,8 @@
 (defn add-collectable [key pos & more]
   (let [rec (*collectables* key)
         coll (apply (:spawn rec) pos rec more)]
-    (add-entity @*current-map* coll)))
+    (add-entity @*current-map* coll)
+    (swap! *kind-totals* conj {key (inc (kind-total key))})))
 
 (defn posrec->rect [position rec]
   (let [[w h] (:dims rec)
@@ -187,7 +193,9 @@
 
   Useable
   (use-thing [c user]
-    (if-let [idx (map/kind-towards? @*current-map* (to-rect user) (:direction @(:particle user)) :breakable)]
+    (if-let [idx (map/kind-towards? @*current-map* (to-rect user)
+                                    (:direction @(:particle user))
+                                    :breakable)]
       (do
         (play-sound :dig)
         (add-entity @*current-map* (add-collectable :rubble (map/idx->coords @*current-map* idx) (take-brick idx)))))))
@@ -232,12 +240,14 @@
 
   Useable
   (use-thing [c user]
-    (if-let [below-fillable-idx (map/kind-towards? @*current-map* (to-rect user) :below fillable?)]
+    (if-let [below-fillable-idx (map/kind-towards? @*current-map* (to-rect user)
+                                                   :below fillable?)]
       ;; if we can fill below, do that
       (map/set-map-idx @*current-map* below-fillable-idx (conj map-rec {:used true}))
 
       ;; otherwise, try the direction we're facing
-      (when-let [idx (map/kind-towards? @*current-map* (to-rect user) (:direction @(:particle user)) fillable?)]
+      (when-let [idx (map/kind-towards? @*current-map* (to-rect user)
+                                        (:direction @(:particle user)) fillable?)]
         (map/set-map-idx @*current-map* idx (conj map-rec {:used true})))))
 
   cljs.core.IHash
@@ -270,7 +280,9 @@
      (let [time (Math/floor (:time @(:state timer)))
            minutes (Math/floor (/ time 60))
            seconds (mod time 60)]
-       (draw-text-centered ctx *hud-font* (utils/format "%2d:%02d" minutes seconds) position))))
+       (draw-text-centered
+        ctx *hud-font*
+        (utils/format "%2d:%02d" minutes seconds) position))))
 
 (defn fill-template [pdata [px py] sym]
   (let [src-rect [px py 16 16]
@@ -387,25 +399,38 @@
     ))
 
 (defn with-prepared-assets [callback]
-  (with-loaded-font "graphics/basic-font.gif" *font-chars* [8 8] 2 [128 0 0]
-    (fn [font]
-      (set! *hud-font* font)))
+  (utils/with-loaded-assets
+    {:font
+     (utils/curry with-loaded-font "graphics/basic-font.gif" *font-chars* [8 8] 2 [128 0 0])
 
-  (gfx/with-img (str "graphics/hud.png")
-    (fn [hud]
-      (set! *hud* (resize-nearest-neighbor (gfx/get-pixel-data hud) [640 480]))
-      
-      (gfx/with-img (str "graphics/sprites.png")
-        (fn [sprites]
-          (setup-symbols sprites)
-          (callback))))))
+     :hud
+     (utils/curry gfx/with-img "graphics/hud.png")
 
-(defn with-loaded-map [callback]
-  (gfx/with-img (str "graphics/world2.gif")
-    (fn [map-img]
-      (reset! *current-map* (map/load map-img *symbols*))
+     :sprites
+     (utils/curry gfx/with-img "graphics/sprites.png")
+
+     :map
+     (utils/curry gfx/with-img "graphics/world2.gif")
+
+     :dialog
+     (utils/curry gfx/with-img "graphics/dialog.png")
+
+     :instructions
+     (utils/curry gfx/with-img "graphics/instructions.png")
+
+     :backdrop
+     (utils/curry gfx/with-img "graphics/backdrop.png")
+     }
+
+    (fn [assets]
+      (set! *hud-font* (:font assets))
+      (set! *hud* (resize-nearest-neighbor (gfx/get-pixel-data (:hud assets)) [640 480]))
+      (set! *base-dialog* (resize-nearest-neighbor (gfx/get-pixel-data (:dialog assets)) [640 480]))
+      (set! *instructions* (resize-nearest-neighbor (gfx/get-pixel-data (:instructions assets)) [648 480]))
+      (setup-symbols (:sprites assets))
+      (reset! *current-map* (map/load (:map assets) *symbols*))
+      (set! *backdrop* (:backdrop assets))
       (callback))))
-
 
 (extend-type js/HTMLCanvasElement
   IHash
@@ -572,18 +597,20 @@
 
 (def *viewport* nil)
 
-(defn add-keys [locations]
-  (doseq [loc locations]
-    (add-collectable :key loc))
-  (reset! *total-keys* (count locations)))
-
-(def *player-speed* 6)
-
 (defn get-recorded-brain []
   (brain/RecordedBrain.
    (apply array recorded/+quick-run+)
    (atom nil)
    (atom nil)))
+
+(def *level-definition*
+  {:player [5 5]
+   :items
+   {:jackhammer [[9 5]]
+    :blowtorch [[5 22]]
+    :key [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49] [22 29]]
+    }
+   })
 
 (defn setup-world [callback player-brain]
   (empty-bag)
@@ -598,7 +625,7 @@
    (Player.
     (atom
      {:mass 5
-      :position [5 5]
+      :position (*level-definition* :player)
       :velocity [0 0]
       })
     player-brain))
@@ -630,10 +657,10 @@
            (vec/scale drag-dir (* spd 0.3))))]})))
 
   (set-display-and-viewport *canvas* [640 480] #(to-rect *viewport*))
-  
-  (add-collectable :jackhammer [9 5])
-  (add-collectable :blowtorch [5 22])
-  (add-keys [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49] [22 29]])
+
+  (doseq [[kind instances] (*level-definition* :items)]
+    (doseq [inst instances]
+      (add-collectable kind inst)))
 
   (add-entity @*current-map* *viewport*)
   (add-entity @*current-map* *player*)
@@ -716,32 +743,14 @@
 
   ;; next state
   (cond
-   (= @*keys-collected* @*total-keys*)
+   (= @*keys-collected* (kind-total :key))
    :finished
 
    :else
    stable-state))
 
-(def *base-dialog* nil)
-(def *instructions* nil)
-
-(defn with-dialog-assets [callback]
-  (gfx/with-img "graphics/dialog.png"
-    (fn [dialog]
-      (set! *base-dialog* (resize-nearest-neighbor (gfx/get-pixel-data dialog) [640 480]))
-      (gfx/with-img "graphics/instructions.png"
-        (fn [instr]
-          (set! *instructions* (resize-nearest-neighbor (gfx/get-pixel-data instr) [648 480]))
-          (callback))))))
 
 (def *instruction-time* (atom nil))
-
-(defn once-only-setup [callback]
-  (with-prepared-assets
-    (fn []
-      (with-dialog-assets
-        (fn []
-          (callback))))))
 
 (def +total-instruction-time+ 30)
 
@@ -799,7 +808,7 @@
     
     (if (or (<= @*instruction-time* 0)
             (any-keys-pressed?))
-      :setup-map
+      :start
       :instructions)))
 
 (def *scorescreen-cooldown* (atom {}))
@@ -815,7 +824,7 @@
     (.drawImage ctx *base-dialog* 0 0)
     (draw-text-centered ctx *hud-font* "Time is Up!" [320 100])
     (.drawImage ctx key-img 216 150)
-    (draw-text ctx *hud-font* (utils/format "%d of %d" @*keys-collected* @*total-keys*) [264 158])
+    (draw-text ctx *hud-font* (utils/format "%d of %d" @*keys-collected* (kind-total :key)) [264 158])
     (.drawImage ctx *money-icon* 216 182)
     (draw-text ctx *hud-font* (utils/format "$%d" (* 1000 @*bricks-destroyed*)) [264 190])
     (draw-text ctx *hud-font* "of damage done" [264 222])
@@ -825,7 +834,7 @@
   (cooldown-tick *scorescreen-cooldown*)
   
   (if (and (is-cool? *scorescreen-cooldown*) (any-keys-pressed?))
-    :setup-map
+    :start
     :show-score))
 
 (defn prepare-finished-screen [callback]
@@ -838,7 +847,7 @@
     (.drawImage ctx *base-dialog* 0 0)
     (draw-text-centered ctx *hud-font* "Amazing!!" [320 100])
     (.drawImage ctx key-img 216 150)
-    (draw-text ctx *hud-font* (utils/format "All %d found" @*total-keys*) [264 158])
+    (draw-text ctx *hud-font* (utils/format "All %d found" (kind-total :key)) [264 158])
     (.drawImage ctx *money-icon* 216 182)
     (draw-text ctx *hud-font* (utils/format "$%d" (* 1000 @*bricks-destroyed*)) [264 190])
     (draw-text ctx *hud-font* "of damage done" [264 222])
@@ -848,7 +857,7 @@
   (cooldown-tick *scorescreen-cooldown*)
   
   (if (and (is-cool? *scorescreen-cooldown*) (any-keys-pressed?))
-    :setup-map
+    :start
     :finished))
 
 (defn window-params []
@@ -860,15 +869,7 @@
 
 (def *game-states*
   {:start
-   {:setup once-only-setup
-    :after-ticks (fn [] :setup-map)}
-
-   :instructions
-   {:setup prepare-instructions
-    :after-ticks instructions-screen}
-
-   :setup-map
-   {:setup with-loaded-map
+   {:setup with-prepared-assets
     :after-ticks (fn []
                    (if (> (count (window-params)) 0)
                      :recorded-game
@@ -1002,13 +1003,9 @@
 
 (def *editor-states*
   {:start
-   {:setup once-only-setup
-    :after-ticks (fn [] :setup-map)}
-
-   :setup-map
-   {:setup with-loaded-map
+   {:setup with-prepared-assets
     :after-ticks (fn [] :editor)}
-   
+
    :editor
    {:setup setup-editor
     :after-ticks draw-editor}
