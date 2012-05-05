@@ -24,6 +24,7 @@
             [showoff.ai :as brain]
             [showoff.states :as states]
             [showoff.utils :as utils]
+            [showoff.events :as event]
             [ld23.recorded :as recorded]
             [goog.events :as gevents]
             [goog.Timer :as timer]
@@ -82,7 +83,8 @@
 (defn add-collectable [key pos & more]
   (let [coll (apply spawn-item key pos more)]
     (add-entity @*current-map* coll)
-    (swap! *kind-totals* conj {key (inc (kind-total key))})))
+    (swap! *kind-totals* conj {key (inc (kind-total key))})
+    coll))
 
 (defn posrec->rect [position rec]
   (let [[w h] (:dims rec)
@@ -455,7 +457,7 @@ thing"
       (set! *backdrop* (:backdrop assets))
       (callback))))
 
-(defn with-prepared-assets [callback]
+(defn with-persistent-assets [callback]
   (utils/with-loaded-assets
     {:font
      (utils/curry with-loaded-font "graphics/basic-font.gif" *font-chars* [8 8] 2 [128 0 0])
@@ -829,7 +831,7 @@ thing"
 
 (def *game-states*
   {:start
-   {:setup with-prepared-assets
+   {:setup with-persistent-assets
     :after-ticks (fn [] :load-level)}
 
    :load-level
@@ -920,14 +922,26 @@ thing"
 (defn editor-mouseclicked [ge]
   (when-let [tool @*current-tool*]
     (if (= (:kind tool) :fist)
-      ;; erase anything here
+      ;; announce the intent to erase anything here
       (let [[mx my] (mouse-position)]
         (map/with-objects-in-rect @*current-map* [mx my 1 1]
           (fn [obj]
-            (remove-entity @*current-map* obj))))
+            (event/dispatch-event (event/make :remove obj)))))
       
-      ;; drop a new tool here
-      (add-collectable (:kind tool) (mouse-position)))))
+      ;; announce the intent to add something
+      (event/dispatch-event
+       (event/make :add {:kind (:kind tool)
+                         :position (mouse-position)})))))
+
+(event/listen
+ :add
+ (fn [data]
+   (add-collectable (:kind data) (:position data))))
+
+(event/listen
+ :remove
+ (fn [obj]
+   (remove-entity @*current-map* obj)))
 
 (defn setup-editor [callback]
   (doseq [tool (keys *collectables*)]
@@ -959,13 +973,25 @@ thing"
     
     :editor))
 
+(def *next-level-definition*
+  {:player [28 17]
+   :items
+   {:jackhammer []
+    :blowtorch []
+    :key []
+    }
+   :map "graphics/world3.gif"
+   :backdrop "graphics/backdrop.png"
+   :initial-bag [:jackhammer :blowtorch :fist :rubble :rubble :rubble :rubble]
+   })
+
 (def *editor-states*
   {:start
-   {:setup with-prepared-assets
+   {:setup with-persistent-assets
     :after-ticks (fn [] :load-level)}
 
    :load-level
-   {:setup (utils/curry with-level-assets *level-definition*)
+   {:setup (utils/curry with-level-assets *next-level-definition*)
     :after-ticks (fn [] :editor)}
    
    :editor
