@@ -30,6 +30,7 @@
             [goog.Timer :as timer]
             [goog.events.KeyHandler :as geventskey]
             [goog.Uri :as uri]
+            [goog.dom :as dom]
             [clojure.browser.repl :as repl]))
 
 (def *canvas* nil)
@@ -78,7 +79,7 @@
      (let [rec (*collectables* key)]
        (conj
         (apply (:spawn rec) pos rec more)
-        {:key key}))))
+        {:spawn-key key :spawn-position pos}))))
 
 (defn add-collectable [key pos & more]
   (let [coll (apply spawn-item key pos more)]
@@ -120,7 +121,10 @@
 
   showoff.showoff.Tickable
   (tick [vp]
-    (reset! particle (integrate-particle @particle))))
+    (reset! particle (integrate-particle @particle)))
+
+  showoff.showoff.Indexed
+  (indexed? [vp] false))
 
 (defrecord StaticCollectable [position rec]
   showoff.showoff.Rectable
@@ -150,7 +154,11 @@
 (defn item-key [e]
   "spawn-item makes sure that this is a valid key on any spawned
 thing"
-  (:key e))
+  (:spawn-key e))
+
+(defn item-position [e]
+  "the position that was given to spawn-item"
+  (:spawn-position e))
 
 (defn item-spec [e]
   (*collectables* (item-key e)))
@@ -432,25 +440,45 @@ thing"
              :spawn (fn [pos rec] (Fist. rec))}}))
     ))
 
-(def *level-definition*
-  {:player [5 5]
-   :items
-   {:jackhammer [[9 5]]
-    :blowtorch [[5 22]]
-    :key [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49] [22 29]]
-    }
-   :map "graphics/world2.gif"
-   :backdrop "graphics/backdrop.png"
-   :initial-bag [:jackhammer :blowtorch :fist :rubble :rubble :rubble :rubble]
-   })
+(def *current-level-index* (atom 0))
 
-(defn with-level-assets [level callback]
+(def *levels*
+  [{:player [5 5]
+    :items
+    {:jackhammer [[9 5]]
+     :blowtorch [[5 22]]
+     :key [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49] [22 29]]
+     }
+    :map "graphics/world2.gif"
+    :backdrop "graphics/backdrop.png"
+    :initial-bag [:fist]
+    }
+   
+   {:backdrop "graphics/backdrop.png"
+    :initial-bag [:fist]
+    :player [28 17]
+    :items
+    {:blowtorch []
+     :rubble [[43 31] [43 32] [43 33]]
+     :jackhammer []
+     :key [[43 17] [43 30] [17 28] [12 19] [10 21]]}
+    :map "graphics/world3.gif"}
+   ])
+
+(defn current-level []
+  (let [idx @*current-level-index*]
+    (*levels* idx)))
+
+(defn cycle-next-level []
+  (swap! *current-level-index* (fn [v] (mod (inc v) (count *levels*)))))
+
+(defn with-level-assets [callback]
   (utils/with-loaded-assets
     {:map
-     (utils/curry gfx/with-img (level :map))
+     (utils/curry gfx/with-img ((current-level) :map))
 
      :backdrop
-     (utils/curry gfx/with-img (level :backdrop))}
+     (utils/curry gfx/with-img ((current-level) :backdrop))}
 
     (fn [assets]
       (reset! *current-map* (map/load (:map assets) *symbols*))
@@ -661,7 +689,7 @@ thing"
   (doseq [item (level :initial-bag)]
     (add-to-bag (spawn-item item))))
 
-(defn setup-world [level player-brain callback]
+(defn setup-world [player-brain callback]
   (empty-bag)
   (clear-entities)
   (reset! *keys-collected* 0)
@@ -672,7 +700,7 @@ thing"
    (Player.
     (atom
      {:mass 5
-      :position (level :player)
+      :position ((current-level) :player)
       :velocity [0 0]
       })
     player-brain))
@@ -684,7 +712,7 @@ thing"
     [20 15]
     (atom
      {:mass 1
-      :position (level :player)
+      :position ((current-level) :player)
       :velocity [0 0]
       
       ;; try to keep the player character basically centered
@@ -704,7 +732,8 @@ thing"
 
   (set-display-and-viewport *canvas* [640 480] #(to-rect *viewport*))
 
-  (add-level-items level)
+  (reset! *kind-totals* {})
+  (add-level-items (current-level))
 
   (add-entity @*current-map* *viewport*)
   (add-entity @*current-map* *player*)
@@ -759,7 +788,7 @@ thing"
       (.drawImage ctx *backdrop* (- 0 50 (* 13 vx)) (- 0 10 (* 13 vy)))
       (map/draw ctx @*current-map* (viewport-rect)
                 showoff.showoff.*tile-in-world-dims*)
-      (draw-entities ctx)
+      (draw-entities @*current-map* ctx)
 
       ;; draw the hitrect
       ;;(filled-rect ctx (to-rect *player*) (color [255 0 255]))
@@ -801,6 +830,7 @@ thing"
 
 (defn prepare-finished-screen [callback]
   (cooldown-start *scorescreen-cooldown* 1)
+  (cycle-next-level)
   (callback))
 
 (defn finished-screen [ticks]
@@ -835,18 +865,18 @@ thing"
     :after-ticks (fn [] :load-level)}
 
    :load-level
-   {:setup (utils/curry with-level-assets *level-definition*)
+   {:setup with-level-assets
     :after-ticks (fn []
                    (if (> (count (window-params)) 0)
                      :recorded-game
                      :game))}
    
    :game
-   {:setup (utils/curry setup-world *level-definition* (brain/KeyboardBrain.))
+   {:setup (utils/curry setup-world (brain/KeyboardBrain.))
     :after-ticks #(draw-world % :game)}
 
    :recorded-game
-   {:setup (utils/curry setup-world *level-definition* (get-recorded-brain))
+   {:setup (utils/curry setup-world (get-recorded-brain))
     :after-ticks #(draw-world % :recorded-game)}
    
    :finished
@@ -905,7 +935,10 @@ thing"
 
     (when (brain/state? brain :down)
       (let [[x y] @pos]
-        (reset! pos [x (inc y)])))))
+        (reset! pos [x (inc y)]))))
+
+  showoff.showoff.Indexed
+  (indexed? [view] false))
 
 (def *mouse-position* [0 0])
 
@@ -954,6 +987,13 @@ thing"
   (let [disp (display)]
     (gevents/listen disp "mousemove" editor-mousemoved)
     (gevents/listen disp "click" editor-mouseclicked))
+
+  ;; fire the events for the contents of this level
+  (doseq [[key positions] (:items (current-level))]
+    (doseq [pos positions]
+      (event/dispatch-event
+       (event/make :add {:kind key :position pos}))))
+  
   (callback))
 
 (defn draw-editor [ticks]
@@ -968,22 +1008,10 @@ thing"
     (map/draw ctx @*current-map* (viewport-rect)
               showoff.showoff.*tile-in-world-dims*)
 
-    (draw-entities ctx)
+    (draw-entities @*current-map* ctx)
     (draw-sprite ctx (:image tool-rec) (mouse-position))
     
     :editor))
-
-(def *next-level-definition*
-  {:player [28 17]
-   :items
-   {:jackhammer []
-    :blowtorch []
-    :key []
-    }
-   :map "graphics/world3.gif"
-   :backdrop "graphics/backdrop.png"
-   :initial-bag [:jackhammer :blowtorch :fist :rubble :rubble :rubble :rubble]
-   })
 
 (def *editor-states*
   {:start
@@ -991,7 +1019,7 @@ thing"
     :after-ticks (fn [] :load-level)}
 
    :load-level
-   {:setup (utils/curry with-level-assets *next-level-definition*)
+   {:setup with-level-assets
     :after-ticks (fn [] :editor)}
    
    :editor
@@ -1009,7 +1037,39 @@ thing"
     
     (input/prepare input/standard-remapper)
     
-    (states/game-loop *editor-states* identity)))
+    (states/game-loop *editor-states* identity)
+
+    (let [out (utils/by-id "output")
+          map-data (atom (conj (current-level) {:items {}}))]
+      
+      (event/listen
+       :add
+       (fn [spec]
+         (let [items (:items @map-data)
+               kind (:kind spec)
+               positions (kind items)
+               positions (into [] (conj positions (:position spec)))
+               items (conj items {kind positions})]
+           (swap! map-data conj {:items items})
+           (event/dispatch-event
+            (event/make :level-updated @map-data)))))
+
+      (event/listen
+       :remove
+       (fn [obj]
+         (let [items (:items @map-data)
+               kind (item-key obj)
+               position (item-position obj)
+               positions (into [] (remove #(= % position) (kind items)))
+               items (conj items {kind positions})]
+           (swap! map-data conj {:items items})
+           (event/dispatch-event
+            (event/make :level-updated @map-data)))))
+
+      (event/listen
+       :level-updated
+       (fn [level]
+         (dom/setTextContent out (pr-str level)))))))
 
 (def *brain-recorder* nil)
 
