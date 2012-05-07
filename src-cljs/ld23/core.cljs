@@ -25,9 +25,9 @@
             [showoff.states :as states]
             [showoff.utils :as utils]
             [showoff.events :as event]
+            [showoff.timer :as timer]
             [ld23.recorded :as recorded]
             [goog.events :as gevents]
-            [goog.Timer :as timer]
             [goog.events.KeyHandler :as geventskey]
             [goog.Uri :as uri]
             [goog.dom :as dom]
@@ -44,6 +44,7 @@
 (def *player* nil)
 
 (def *backdrop* nil)
+(def *light* nil)
 (def *player-sprite* nil)
 (def *money-icon* nil)
 (def *hud* nil)
@@ -136,7 +137,7 @@
   Collectable
   (collect [c]
     (swap! *keys-collected* inc)
-    (play-sound :powerup)
+    (play-sound :pickup-item)
     (remove-entity @*current-map* c)))
 
 (defn breakable-underneath? [rect]
@@ -499,12 +500,15 @@ thing"
      :dialog
      (utils/curry gfx/with-img "graphics/dialog.png")
 
+     :light
+     (utils/curry gfx/with-img "graphics/light.png")
      }
 
     (fn [assets]
       (set! *hud-font* (:font assets))
       (set! *hud* (gfx/resize-nearest-neighbor (gfx/get-pixel-data (:hud assets)) [640 480]))
       (set! *base-dialog* (gfx/resize-nearest-neighbor (gfx/get-pixel-data (:dialog assets)) [640 480]))
+      (set! *light* (:light assets))
       (setup-symbols (:sprites assets))
       (callback))))
 
@@ -562,28 +566,25 @@ thing"
   
 
   ;; velocity integration and collision detection
-  (swap!
-   particle conj
-   {
-    :position
-    (vec/add
-     (particle-position particle)
-     (move-check-map-collision
-      @*current-map*
-      (vec/scale (particle-velocity particle)
-                 showoff.showoff.+secs-per-tick+)
-      (to-rect player)
-      ;; on-x-collide
-      (fn [idx]
-        (let [[vx vy] (particle-velocity particle)]
-          (swap! particle conj {:velocity [0 vy]})
-          true))
-      
-      ;; on-y-collide
-      (fn [idx]
-        (let [[vx vy] (particle-velocity particle)]
-          (swap! particle conj {:velocity [vx 0]})
-          true))))}))
+  (let [new-pos (vec/add
+                 (particle-position particle)
+                 (move-check-map-collision
+                  @*current-map*
+                  (vec/scale (particle-velocity particle)
+                             showoff.showoff.+secs-per-tick+)
+                  (to-rect player)
+                  ;; on-x-collide
+                  (fn [idx]
+                    (let [[vx vy] (particle-velocity particle)]
+                      (swap! particle conj {:velocity [0 vy]})
+                      true))
+                  
+                  ;; on-y-collide
+                  (fn [idx]
+                    (let [[vx vy] (particle-velocity particle)]
+                      (swap! particle conj {:velocity [vx 0]})
+                      true))))]
+    (swap! particle conj {:position new-pos})))
 
 (defn timer-value [mutable place]
   (or (place @mutable) 0))
@@ -745,6 +746,9 @@ thing"
   
   (callback))
 
+(defn- service-sound []
+  (.loop jukebox.Manager))
+
 (defn prepare-sound []
   (let [sounds {:resources ["sounds/music2.ogg"
                             "sounds/music2.mp3"]
@@ -777,7 +781,8 @@ thing"
         
         mgrconfig {"useGameLoop" true}]
     (set! jukebox.Manager (jukebox.Manager. (utils/clj->js mgrconfig)))
-    (set! *media-player* (jukebox.Player. (utils/clj->js sounds)))))
+    (set! *media-player* (jukebox.Player. (utils/clj->js sounds)))
+    (timer/periodic 16 service-sound)))
 
 (defn draw-world [ticks stable-state]
   ;; only draw if we actually ticked
@@ -792,8 +797,16 @@ thing"
 
       ;; draw the hitrect
       ;;(filled-rect ctx (to-rect *player*) (color [255 0 255]))
+
+      ;; draw the map rects
+      (comment
+        (doseq [idx (map/rect->idxs-all @*current-map* (to-rect *player*))]
+          (filled-rect ctx (map/idx->rect @*current-map* idx) (color [255 0 255]))))
       
       (draw-player-entity ctx *player*)
+
+      ;; draw lights
+      (draw-sprite ctx *light* [26 6])
       
       ;; draw the hud
       (let [[w h] (gfx/img-dims *hud*)
@@ -895,7 +908,7 @@ thing"
     (input/prepare input/standard-remapper)
     (prepare-sound)
     
-    (states/game-loop *game-states* #(.loop jukebox.Manager))))
+    (states/game-loop *game-states*)))
 
 (def *current-tool* (atom nil))
 
@@ -1037,7 +1050,7 @@ thing"
     
     (input/prepare input/standard-remapper)
     
-    (states/game-loop *editor-states* identity)
+    (states/game-loop *editor-states*)
 
     (let [out (utils/by-id "output")
           map-data (atom (conj (current-level) {:items {}}))]
