@@ -8,10 +8,10 @@
                                 drag-force-generator gravity-force-generator
                                 integrate-particle spring-force
                                 apply-particle-vs-map
-                                draw-sprite inverse-transform
+                                draw-sprite inverse-transform-position
                                 draw-entities filled-rect
                                 color move-check-map-collision
-                                record-vs-rect
+                                record-vs-rect inverse-transform-dims
                                 set-display-and-viewport cycle-once
                                 head-bumped-map with-loaded-font draw-text
                                 draw-text-centered stats-string fill-style]))
@@ -126,6 +126,17 @@
 
   showoff.showoff.Indexed
   (indexed? [vp] false))
+
+(defrecord OverlayImage [position img]
+  showoff.showoff.Rectable
+  (to-rect [obj]
+    (let [[w h] (inverse-transform-dims (gfx/img-dims img))
+          [x y] position]
+      [x y w h]))
+
+  showoff.showoff.Drawable
+  (draw [obj ctx]
+    (draw-sprite ctx img position)))
 
 (defrecord StaticCollectable [position rec]
   showoff.showoff.Rectable
@@ -443,6 +454,10 @@ thing"
 
 (def *current-level-index* (atom 0))
 
+(def *overlay-assets*
+  (atom
+   {:light (utils/curry gfx/with-img "graphics/light.png")}))
+
 (def *levels*
   [{:player [5 5]
     :items
@@ -453,6 +468,7 @@ thing"
     :map "graphics/world2.gif"
     :backdrop "graphics/backdrop.png"
     :initial-bag [:fist]
+    :overlay [[:light [26 6]]]
     }
    
    {:backdrop "graphics/backdrop.png"
@@ -473,6 +489,8 @@ thing"
 (defn cycle-next-level []
   (swap! *current-level-index* (fn [v] (mod (inc v) (count *levels*)))))
 
+(def *overlay-entities* (atom nil))
+
 (defn with-level-assets [callback]
   (utils/with-loaded-assets
     {:map
@@ -484,6 +502,11 @@ thing"
     (fn [assets]
       (reset! *current-map* (map/load (:map assets) *symbols*))
       (set! *backdrop* (:backdrop assets))
+
+      (reset! *overlay-entities* (map (fn [[key pos]]
+                                        (OverlayImage. pos (key @*overlay-assets*)))
+                                      (:overlay (current-level))))
+      
       (callback))))
 
 (defn with-persistent-assets [callback]
@@ -510,7 +533,11 @@ thing"
       (set! *base-dialog* (gfx/resize-nearest-neighbor (gfx/get-pixel-data (:dialog assets)) [640 480]))
       (set! *light* (:light assets))
       (setup-symbols (:sprites assets))
-      (callback))))
+
+      (utils/with-loaded-assets @*overlay-assets*
+        (fn [overlay]
+          (reset! *overlay-assets* overlay)
+          (callback))))))
 
 (extend-type js/HTMLCanvasElement
   IHash
@@ -805,8 +832,10 @@ thing"
       
       (draw-player-entity ctx *player*)
 
-      ;; draw lights
-      (draw-sprite ctx *light* [26 6])
+      ;; draw overlays
+      (doseq [overlay @*overlay-entities*]
+        (when (rect/intersect (viewport-rect) (to-rect overlay))
+          (draw overlay ctx)))
       
       ;; draw the hud
       (let [[w h] (gfx/img-dims *hud*)
@@ -962,7 +991,7 @@ thing"
     (set! *mouse-position* [x y])))
 
 (defn mouse-position []
-  (let [[mx my] (inverse-transform *mouse-position*)]
+  (let [[mx my] (inverse-transform-position *mouse-position*)]
     [(Math/floor mx) (Math/floor my)]))
 
 (defn editor-mouseclicked [ge]
