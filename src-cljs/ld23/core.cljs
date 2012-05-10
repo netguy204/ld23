@@ -459,18 +459,16 @@ thing"
    {:light (utils/curry gfx/with-img "graphics/light.png")}))
 
 (def *levels*
-  [{:player [5 5]
-    :items
-    {:jackhammer [[9 5]]
-     :blowtorch [[5 22]]
-     :key [[21 24] [30 22] [31 22] [32 22] [33 22] [54 16] [59 39] [6 49] [7 49] [8 49] [9 49] [22 29]]
-     }
-    :map "graphics/world2.gif"
-    :backdrop "graphics/backdrop.png"
+  [{:backdrop "graphics/backdrop.png"
     :initial-bag [:fist]
-    :overlays [[:light [26 6]]]
-    }
-   
+    :player [5 5]
+    :overlays [[:light [38 17]] [:light [10 39]]]
+    :items
+    {:blowtorch [[5 22]]
+     :jackhammer [[9 5]]
+     :key [[21 24] [30 22] [31 22] [32 22] [33 22] [59 39] [6 49] [7 49] [8 49] [9 49] [22 29] [58 59] [8 56] [47 31]]}
+    :map "graphics/world2.gif"}
+
    {:backdrop "graphics/backdrop.png"
     :initial-bag [:fist]
     :player [28 17]
