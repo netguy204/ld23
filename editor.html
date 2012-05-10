@@ -7,18 +7,22 @@
     <script src="javascripts/main.js"></script>
 
     <style type="text/css" media="screen">
-      .tool {
+      body {
+          background: #006;
+      }
+
+      .brush {
           width: 32px;
           height: 32px;
           background: #fff;
           display:inline;
       }
 
-      .tool:hover {
+      .brush:hover {
           background: #bbb;
       }
 
-      .tool-selected {
+      .brush-selected {
           background: #bbf;
           display:inline;
       }
@@ -36,6 +40,8 @@
     </div>
 
     <div id="tools" class="tools"></div>
+    <div id="overlays" class="overlays"></div>
+
     <div id="output"></div>
 
     <script language="javascript">

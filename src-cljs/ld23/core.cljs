@@ -468,7 +468,7 @@ thing"
     :map "graphics/world2.gif"
     :backdrop "graphics/backdrop.png"
     :initial-bag [:fist]
-    :overlay [[:light [26 6]]]
+    :overlays [[:light [26 6]]]
     }
    
    {:backdrop "graphics/backdrop.png"
@@ -505,7 +505,7 @@ thing"
 
       (reset! *overlay-entities* (map (fn [[key pos]]
                                         (OverlayImage. pos (key @*overlay-assets*)))
-                                      (:overlay (current-level))))
+                                      (:overlays (current-level))))
       
       (callback))))
 
@@ -525,6 +525,10 @@ thing"
 
      :light
      (utils/curry gfx/with-img "graphics/light.png")
+
+     :overlays
+     (utils/curry utils/with-loaded-assets @*overlay-assets*)
+     
      }
 
     (fn [assets]
@@ -533,11 +537,9 @@ thing"
       (set! *base-dialog* (gfx/resize-nearest-neighbor (gfx/get-pixel-data (:dialog assets)) [640 480]))
       (set! *light* (:light assets))
       (setup-symbols (:sprites assets))
+      (reset! *overlay-assets* (:overlays assets))
 
-      (utils/with-loaded-assets @*overlay-assets*
-        (fn [overlay]
-          (reset! *overlay-assets* overlay)
-          (callback))))))
+      (callback))))
 
 (extend-type js/HTMLCanvasElement
   IHash
@@ -939,21 +941,87 @@ thing"
     
     (states/game-loop *game-states*)))
 
-(def *current-tool* (atom nil))
+(defmulti apply-brush :class)
 
-(defn select-tool [tool-kind tool-div]
-  (when @*current-tool*
-    (utils/remove-class (:div @*current-tool*) "tool-selected"))
+(defmethod apply-brush nil
+  [nothing]
+  (js/alert "select a brush first"))
 
-  (utils/set-class tool-div "tool-selected")
-  (reset! *current-tool* {:div tool-div :kind tool-kind}))
+(defmulti brush-cursor :class)
+
+(defmethod brush-cursor nil
+  [brush]
+  (-> *collectables* :fist :image))
+
+(def *current-brush* (atom nil))
+(def *mouse-position* [0 0])
+
+(defn editor-mousemoved [ge]
+  (let [x (.-offsetX ge)
+        y (.-offsetY ge)]
+    
+    (set! *mouse-position* [x y])))
+
+(defn mouse-position []
+  (let [[mx my] (inverse-transform-position *mouse-position*)]
+    [(Math/floor mx) (Math/floor my)]))
+
+
+(defn change-brush-highlight [new-div]
+  (when @*current-brush*
+    (utils/remove-class (:div @*current-brush*) "brush-selected"))
+
+  (utils/set-class new-div "brush-selected"))
+
+(defn select-brush [brush-kind brush-div brush-class]
+  (change-brush-highlight brush-div)
+  (reset! *current-brush* {:div brush-div :kind brush-kind :class brush-class}))
 
 (defn- add-tool [kind]
   (let [rec (*collectables* kind)
         box (utils/by-id "tools")
-        tool (utils/div-with-class "tool" (:image rec))]
+        tool (utils/div-with-class "brush" (:image rec))]
     (utils/append-child box tool)
-    (gevents/listen tool "click" #(select-tool kind tool))))
+    (gevents/listen tool "click" #(select-brush kind tool :tool))))
+
+(defmethod apply-brush :tool
+  [tool]
+  (if (= (:kind tool) :fist)
+    ;; announce the intent to erase anything here
+    (let [[mx my] (mouse-position)]
+      (map/with-objects-in-rect @*current-map* [mx my 1 1]
+        (fn [obj]
+          (event/dispatch-event (event/make :remove-item obj)))))
+      
+    ;; announce the intent to add something
+    (event/dispatch-event
+     (event/make :add-item {:kind (:kind tool)
+                            :position (mouse-position)}))))
+
+(defmethod brush-cursor :tool
+  [tool]
+  (let [kind (tool :kind)]
+    (-> *collectables* kind :image)))
+
+(defn- add-overlay [kind]
+  (let [img (@*overlay-assets* kind)
+        box (utils/by-id "overlays")
+        overlay (utils/div-with-class "brush" img)]
+    (utils/append-child box overlay)
+    (gevents/listen overlay "click" #(select-brush kind overlay :overlay))))
+
+(defmethod apply-brush :overlay
+  [overlay]
+  (swap! *overlay-entities* conj
+         (OverlayImage. (mouse-position)
+                        (@*overlay-assets* (:kind overlay))))
+  (event/dispatch-event
+   (event/make :add-overlay {:kind (:kind overlay)
+                             :position (mouse-position)})))
+
+(defmethod brush-cursor :overlay
+  [overlay]
+  (@*overlay-assets* (:kind overlay)))
 
 (defrecord EditorViewport [pos brain]
   showoff.showoff.Rectable
@@ -982,45 +1050,25 @@ thing"
   showoff.showoff.Indexed
   (indexed? [view] false))
 
-(def *mouse-position* [0 0])
-
-(defn editor-mousemoved [ge]
-  (let [x (.-offsetX ge)
-        y (.-offsetY ge)]
-    
-    (set! *mouse-position* [x y])))
-
-(defn mouse-position []
-  (let [[mx my] (inverse-transform-position *mouse-position*)]
-    [(Math/floor mx) (Math/floor my)]))
-
 (defn editor-mouseclicked [ge]
-  (when-let [tool @*current-tool*]
-    (if (= (:kind tool) :fist)
-      ;; announce the intent to erase anything here
-      (let [[mx my] (mouse-position)]
-        (map/with-objects-in-rect @*current-map* [mx my 1 1]
-          (fn [obj]
-            (event/dispatch-event (event/make :remove obj)))))
-      
-      ;; announce the intent to add something
-      (event/dispatch-event
-       (event/make :add {:kind (:kind tool)
-                         :position (mouse-position)})))))
+  (apply-brush @*current-brush*))
 
 (event/listen
- :add
+ :add-item
  (fn [data]
    (add-collectable (:kind data) (:position data))))
 
 (event/listen
- :remove
+ :remove-item
  (fn [obj]
    (remove-entity @*current-map* obj)))
 
 (defn setup-editor [callback]
   (doseq [tool (keys *collectables*)]
     (add-tool tool))
+
+  (doseq [overlay (keys @*overlay-assets*)]
+    (add-overlay overlay))
 
   (let [viewport (EditorViewport. (atom [0 0]) (brain/KeyboardBrain.))]
     (set-display-and-viewport *canvas* [640 480] #(to-rect viewport))
@@ -1034,24 +1082,28 @@ thing"
   (doseq [[key positions] (:items (current-level))]
     (doseq [pos positions]
       (event/dispatch-event
-       (event/make :add {:kind key :position pos}))))
+       (event/make :add-item {:kind key :position pos}))))
   
   (callback))
 
 (defn draw-editor [ticks]
   (let [disp (display)
         ctx (gfx/context disp)
-        tool-kind (if @*current-tool*
-                   (:kind @*current-tool*)
-                   :fist)
-        tool-rec (*collectables* tool-kind)]
+        brush-img (brush-cursor @*current-brush*)]
     
     (gfx/clear disp)
     (map/draw ctx @*current-map* (viewport-rect)
               showoff.showoff.*tile-in-world-dims*)
 
     (draw-entities @*current-map* ctx)
-    (draw-sprite ctx (:image tool-rec) (mouse-position))
+
+    ;; draw overlays
+    (doseq [overlay @*overlay-entities*]
+      (when (rect/intersect (viewport-rect) (to-rect overlay))
+        (draw overlay ctx)))
+
+    ;; draw the cursor
+    (draw-sprite ctx brush-img (mouse-position))
     
     :editor))
 
@@ -1085,7 +1137,7 @@ thing"
           map-data (atom (conj (current-level) {:items {}}))]
       
       (event/listen
-       :add
+       :add-item
        (fn [spec]
          (let [items (:items @map-data)
                kind (:kind spec)
@@ -1097,7 +1149,17 @@ thing"
             (event/make :level-updated @map-data)))))
 
       (event/listen
-       :remove
+       :add-overlay
+       (fn [spec]
+         (let [overlays (:overlays @map-data)
+               kind (:kind spec)
+               overlays (conj overlays [kind (:position spec)])]
+           (swap! map-data conj {:overlays overlays})
+           (event/dispatch-event
+            (event/make :level-updated @map-data)))))
+
+      (event/listen
+       :remove-item
        (fn [obj]
          (let [items (:items @map-data)
                kind (item-key obj)
