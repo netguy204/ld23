@@ -988,10 +988,18 @@ thing"
   [tool]
   (if (= (:kind tool) :fist)
     ;; announce the intent to erase anything here
-    (let [[mx my] (mouse-position)]
+    (let [[mx my] (mouse-position)
+          found-object (atom false)]
       (map/with-objects-in-rect @*current-map* [mx my 1 1]
         (fn [obj]
-          (event/dispatch-event (event/make :remove-item obj)))))
+          (event/dispatch-event (event/make :remove-item obj))
+          (reset! found-object true)))
+
+      ;; see if we can find an overlay to remove instead
+      (when-not @found-object
+        (doseq [overlay @*overlay-entities*]
+          (when (rect/intersect (to-rect overlay) [mx my 1 1])
+            (event/dispatch-event (event/make :remove-overlay overlay))))))
       
     ;; announce the intent to add something
     (event/dispatch-event
@@ -1062,6 +1070,13 @@ thing"
  :remove-item
  (fn [obj]
    (remove-entity @*current-map* obj)))
+
+(event/listen
+ :remove-overlay
+ (fn [overlay]
+   (reset!
+    *overlay-entities*
+    (remove #(= overlay %) @*overlay-entities*))))
 
 (defn setup-editor [callback]
   (doseq [tool (keys *collectables*)]
