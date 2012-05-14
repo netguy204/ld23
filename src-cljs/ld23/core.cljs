@@ -5,16 +5,16 @@
                                 reset-tick-clock
                                 viewport-rect display
                                 tick-entities tick to-rect draw
-                                drag-force-generator gravity-force-generator
+                                drag-force-generator
                                 integrate-particle spring-force
                                 apply-particle-vs-map
                                 draw-sprite inverse-transform-position
                                 draw-entities filled-rect
                                 color move-check-map-collision
                                 record-vs-rect inverse-transform-dims
-                                set-display-and-viewport cycle-once
+                                set-display-and-viewport
                                 head-bumped-map with-loaded-font draw-text
-                                draw-text-centered stats-string fill-style]))
+                                draw-text-centered]))
   
   (:require [showoff.vec :as vec]
             [showoff.rect :as rect]
@@ -44,8 +44,8 @@
 (def *player* nil)
 
 (def *backdrop* nil)
-(def *light* nil)
 (def *player-sprite* nil)
+(def *light-sprite* nil)
 (def *money-icon* nil)
 (def *hud* nil)
 (def *collectables* nil)
@@ -55,6 +55,12 @@
 (def *kind-totals* (atom {}))
 (def *bricks-destroyed* (atom 0))
 (def *debug-mode* false)
+
+(def *overlay-assets*
+  (atom
+   {:light (utils/curry gfx/with-img "graphics/light.png")
+    :light-helmet (utils/curry gfx/with-img "graphics/light_helmet.png")
+    :sun (utils/curry gfx/with-img "graphics/sun.png")}))
 
 (defn kind-total [kind]
   (or (kind @*kind-totals*) 0))
@@ -71,6 +77,13 @@
 
 (defprotocol Iconic
   (icon [obj]))
+
+(defprotocol Enablable
+  (enable [obj]))
+
+(extend-type default
+  Enablable
+  (enable [_] nil))
 
 (defn spawn-item
   ([key]
@@ -195,6 +208,40 @@ thing"
     (when (not (:used rec)) (swap! *bricks-destroyed* inc))
     rec))
 
+(defrecord Switch [position state target]
+  showoff.showoff.Rectable
+  (to-rect [c]
+    (let [[x y] position]
+      [(+ x (/ 5 16)) (+ y (/ 3 16)) (/ 6 16) (/ 10 16)]))
+  
+  showoff.showoff.Drawable
+  (draw [c ctx]
+    (let [onoff (if @state :on :off)
+          sprite (-> *light-sprite* onoff :image)]
+      (draw-sprite ctx sprite position)))
+
+  Enablable
+  (enable [c]
+    (swap! state not)
+    (enable target)))
+
+(defrecord SwitchableLight [position state]
+  showoff.showoff.Rectable
+  (to-rect [obj]
+    (let [[w h] (inverse-transform-dims (gfx/img-dims (@*overlay-assets* :light-helmet)))
+          [x y] position]
+      [x y w h]))
+
+  showoff.showoff.Drawable
+  (draw [c ctx]
+    (when @state
+      (draw-sprite ctx (@*overlay-assets* :light) position))
+    (draw-sprite ctx (@*overlay-assets* :light-helmet) position))
+
+  Enablable
+  (enable [c]
+    (swap! state not)))
+
 (defrecord Jackhammer [position rec state]
   showoff.showoff.Rectable
   (to-rect [c] (posrec->rect position rec))
@@ -304,7 +351,11 @@ thing"
   (icon [c] (:image rec))
 
   Useable
-  (use-thing [c user] nil))
+  (use-thing [c player]
+    ;; look around for something to enable
+    (map/with-objects-in-rect @*current-map* (to-rect player)
+      (fn [obj]
+        (enable obj)))))
 
 (defn timer-time [timer]
   (or (:time @(:state timer)) 0))
@@ -416,6 +467,12 @@ thing"
             :fall-right {:image [4 1]}
             :fall-left {:image [4 2]}}))
 
+    (set! *light-sprite*
+          (gfx/slice-sprites
+           pdata
+           {:off {:image [4 3]}
+            :on {:image [4 4]}}))
+    
     (set! *money-icon* (gfx/resize-nearest-neighbor pdata [64 0 16 16] dims))
     
     (set! *collectables*
@@ -445,29 +502,26 @@ thing"
                       ([pos rec map-rec] (Rubble. pos rec map-rec)))
              :bag-behavior :stack}
 
-            ;; not really collectable... that would be weird.
             :fist
             {:image [3 1]
              :dims [1 1]
-             :spawn (fn [pos rec] (Fist. rec))}}))
-    ))
+             :spawn (fn [pos rec] (Fist. rec))}}))))
 
 (def *current-level-index* (atom 0))
 
-(def *overlay-assets*
-  (atom
-   {:light (utils/curry gfx/with-img "graphics/light.png")}))
-
 (def *levels*
-  [{:backdrop "graphics/backdrop.png"
+  [
+   {:backdrop "graphics/backdrop.png"
     :initial-bag [:fist]
     :player [5 5]
-    :overlays [[:light [38 17]] [:light [10 39]]]
+    :overlays []
     :items
     {:blowtorch [[5 22]]
      :jackhammer [[9 5]]
      :key [[21 24] [30 22] [31 22] [32 22] [33 22] [59 39] [6 49] [7 49] [8 49] [9 49] [22 29] [58 59] [8 56] [47 31]]}
     :map "graphics/world2.gif"}
+
+   {:backdrop "graphics/backdrop.png", :initial-bag [:fist], :player [2 60], :overlays [[:sun [14 8]]], :items {:blowtorch [[61 60]], :jackhammer [[30 27]], :key [[3 60] [10 53] [9 53] [8 53] [57 53] [50 36] [50 35] [12 47] [33 28] [31 28] [9 52] [8 52] [8 51] [45 41] [19 39] [41 26]]}, :map "graphics/world4.gif"}
 
    {:backdrop "graphics/backdrop.png"
     :initial-bag [:fist]
@@ -501,10 +555,6 @@ thing"
       (reset! *current-map* (map/load (:map assets) *symbols*))
       (set! *backdrop* (:backdrop assets))
 
-      (reset! *overlay-entities* (map (fn [[key pos]]
-                                        (OverlayImage. pos (key @*overlay-assets*)))
-                                      (:overlays (current-level))))
-      
       (callback))))
 
 (defn with-persistent-assets [callback]
@@ -521,9 +571,6 @@ thing"
      :dialog
      (utils/curry gfx/with-img "graphics/dialog.png")
 
-     :light
-     (utils/curry gfx/with-img "graphics/light.png")
-
      :overlays
      (utils/curry utils/with-loaded-assets @*overlay-assets*)
      
@@ -533,7 +580,6 @@ thing"
       (set! *hud-font* (:font assets))
       (set! *hud* (gfx/resize-nearest-neighbor (gfx/get-pixel-data (:hud assets)) [640 480]))
       (set! *base-dialog* (gfx/resize-nearest-neighbor (gfx/get-pixel-data (:dialog assets)) [640 480]))
-      (set! *light* (:light assets))
       (setup-symbols (:sprites assets))
       (reset! *overlay-assets* (:overlays assets))
 
@@ -715,7 +761,13 @@ thing"
   ;; fill our bag
   (reset! *bag* [])
   (doseq [item (level :initial-bag)]
-    (add-to-bag (spawn-item item))))
+    (add-to-bag (spawn-item item)))
+
+  ;; add the overlays
+  (reset! *overlay-entities*
+          (map (fn [[key pos]]
+                 (OverlayImage. pos (key @*overlay-assets*)))
+               (:overlays (current-level)))))
 
 (defn setup-world [player-brain callback]
   (empty-bag)
@@ -763,6 +815,10 @@ thing"
   (reset! *kind-totals* {})
   (add-level-items (current-level))
 
+  (let [light (SwitchableLight. [38 17] (atom true))]
+    (swap! *overlay-entities* conj light)
+    (add-entity @*current-map* (Switch. [51 29] (atom false) light)))
+  
   (add-entity @*current-map* *viewport*)
   (add-entity @*current-map* *player*)
   (add-entity @*current-map* (Bag. *bag*))
@@ -939,19 +995,58 @@ thing"
     
     (states/game-loop *game-states*)))
 
-(defmulti apply-brush :class)
+(defprotocol Brush
+  (brush-apply [brush position])
+  (brush-cursor [brush]))
 
-(defmethod apply-brush nil
-  [nothing]
-  (js/alert "select a brush first"))
+(defrecord FistBrush []
+  Brush
+  (brush-apply [fist position]
+    ;; announce the intent to erase anything here
+    (let [[mx my] position
+          found-object (atom false)]
+      (map/with-objects-in-rect @*current-map* [mx my 1 1]
+        (fn [obj]
+          (remove-entity @*current-map* obj)
+          (event/dispatch-event (event/make :remove-item obj))
+          (reset! found-object true)))
+      
+      ;; see if we can find an overlay to remove instead
+      (when-not @found-object
+        (doseq [overlay @*overlay-entities*]
+          (when (rect/intersect (to-rect overlay) [mx my 1 1])
+            (reset! *overlay-entities*
+                    (remove #(= overlay %) @*overlay-entities*))
+            (event/dispatch-event (event/make :remove-overlay overlay)))))))
 
-(defmulti brush-cursor :class)
+  (brush-cursor [fist]
+    (-> *collectables* :fist :image)))
 
-(defmethod brush-cursor nil
-  [brush]
-  (-> *collectables* :fist :image))
 
-(def *current-brush* (atom nil))
+(defrecord ItemBrush [kind]
+  Brush
+  (brush-apply [item position]
+    (add-collectable kind position)
+    
+    (event/dispatch-event
+     (event/make :add-item {:kind kind :position position})))
+
+  (brush-cursor [item]
+    (-> *collectables* kind :image)))
+
+(defrecord OverlayBrush [kind]
+  Brush
+  (brush-apply [overlay position]
+    (swap! *overlay-entities* conj
+           (OverlayImage. position (@*overlay-assets* kind)))
+    (event/dispatch-event
+     (event/make :add-overlay {:kind kind :position position})))
+
+  (brush-cursor [overlay]
+    (@*overlay-assets* kind)))
+
+(def *current-brush* (atom {:div nil :brush (FistBrush.)}))
+
 (def *mouse-position* [0 0])
 
 (defn editor-mousemoved [ge]
@@ -964,70 +1059,29 @@ thing"
   (let [[mx my] (inverse-transform-position *mouse-position*)]
     [(Math/floor mx) (Math/floor my)]))
 
-
 (defn change-brush-highlight [new-div]
-  (when @*current-brush*
+  (when (:div @*current-brush*)
     (utils/remove-class (:div @*current-brush*) "brush-selected"))
 
   (utils/set-class new-div "brush-selected"))
 
-(defn select-brush [brush-kind brush-div brush-class]
+(defn select-brush [brush brush-div]
   (change-brush-highlight brush-div)
-  (reset! *current-brush* {:div brush-div :kind brush-kind :class brush-class}))
+  (reset! *current-brush* {:div brush-div :brush brush}))
 
 (defn- add-tool [kind]
-  (let [rec (*collectables* kind)
+  (let [brush (ItemBrush. kind)
         box (utils/by-id "tools")
-        tool (utils/div-with-class "brush" (:image rec))]
-    (utils/append-child box tool)
-    (gevents/listen tool "click" #(select-brush kind tool :tool))))
-
-(defmethod apply-brush :tool
-  [tool]
-  (if (= (:kind tool) :fist)
-    ;; announce the intent to erase anything here
-    (let [[mx my] (mouse-position)
-          found-object (atom false)]
-      (map/with-objects-in-rect @*current-map* [mx my 1 1]
-        (fn [obj]
-          (event/dispatch-event (event/make :remove-item obj))
-          (reset! found-object true)))
-
-      ;; see if we can find an overlay to remove instead
-      (when-not @found-object
-        (doseq [overlay @*overlay-entities*]
-          (when (rect/intersect (to-rect overlay) [mx my 1 1])
-            (event/dispatch-event (event/make :remove-overlay overlay))))))
-      
-    ;; announce the intent to add something
-    (event/dispatch-event
-     (event/make :add-item {:kind (:kind tool)
-                            :position (mouse-position)}))))
-
-(defmethod brush-cursor :tool
-  [tool]
-  (let [kind (tool :kind)]
-    (-> *collectables* kind :image)))
+        brush-div (utils/div-with-class "brush" (brush-cursor brush))]
+    (utils/append-child box brush-div)
+    (gevents/listen brush-div "click" #(select-brush brush brush-div))))
 
 (defn- add-overlay [kind]
-  (let [img (@*overlay-assets* kind)
+  (let [brush (OverlayBrush. kind)
         box (utils/by-id "overlays")
-        overlay (utils/div-with-class "brush" img)]
-    (utils/append-child box overlay)
-    (gevents/listen overlay "click" #(select-brush kind overlay :overlay))))
-
-(defmethod apply-brush :overlay
-  [overlay]
-  (swap! *overlay-entities* conj
-         (OverlayImage. (mouse-position)
-                        (@*overlay-assets* (:kind overlay))))
-  (event/dispatch-event
-   (event/make :add-overlay {:kind (:kind overlay)
-                             :position (mouse-position)})))
-
-(defmethod brush-cursor :overlay
-  [overlay]
-  (@*overlay-assets* (:kind overlay)))
+        brush-div (utils/div-with-class "brush" (brush-cursor brush))]
+    (utils/append-child box brush-div)
+    (gevents/listen brush-div "click" #(select-brush brush brush-div))))
 
 (defrecord EditorViewport [pos brain]
   showoff.showoff.Rectable
@@ -1057,26 +1111,13 @@ thing"
   (indexed? [view] false))
 
 (defn editor-mouseclicked [ge]
-  (apply-brush @*current-brush*))
-
-(event/listen
- :add-item
- (fn [data]
-   (add-collectable (:kind data) (:position data))))
-
-(event/listen
- :remove-item
- (fn [obj]
-   (remove-entity @*current-map* obj)))
-
-(event/listen
- :remove-overlay
- (fn [overlay]
-   (reset!
-    *overlay-entities*
-    (remove #(= overlay %) @*overlay-entities*))))
+  (brush-apply (:brush @*current-brush*) (mouse-position)))
 
 (defn setup-editor [callback]
+  ;; set up the display
+  (add-level-items (current-level))
+
+  ;; set up our pallettes
   (doseq [tool (keys *collectables*)]
     (add-tool tool))
 
@@ -1091,18 +1132,12 @@ thing"
     (gevents/listen disp "mousemove" editor-mousemoved)
     (gevents/listen disp "click" editor-mouseclicked))
 
-  ;; fire the events for the contents of this level
-  (doseq [[key positions] (:items (current-level))]
-    (doseq [pos positions]
-      (event/dispatch-event
-       (event/make :add-item {:kind key :position pos}))))
-  
   (callback))
 
 (defn draw-editor [ticks]
   (let [disp (display)
         ctx (gfx/context disp)
-        brush-img (brush-cursor @*current-brush*)]
+        brush-img (brush-cursor (:brush @*current-brush*))]
     
     (gfx/clear disp)
     (map/draw ctx @*current-map* (viewport-rect)
@@ -1147,7 +1182,7 @@ thing"
     (states/game-loop *editor-states*)
 
     (let [out (utils/by-id "output")
-          map-data (atom (conj (current-level) {:items {}}))]
+          map-data (atom (current-level))]
       
       (event/listen
        :add-item
