@@ -1,7 +1,7 @@
 (ns ld23.core
   (:use (showoff.showoff :only [remove-entity add-entity clear-entities
                                 supported-by-map
-                                Rectable Tickable Drawable
+                                Rectable Tickable Drawable MapIndexed
                                 reset-tick-clock
                                 viewport-rect display
                                 tick-entities tick to-rect draw
@@ -36,6 +36,7 @@
 (def *canvas* nil)
 (def *current-map* (atom nil))
 (def *symbols* nil)
+(def *overlay-entities* (atom nil))
 
 (def *hud-font* nil)
 (def *font-chars* "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"?!./:$")
@@ -58,16 +59,21 @@
 
 (def *overlay-assets*
   (atom
-   {:light (utils/curry gfx/with-img "graphics/light.png")
-    :light-helmet (utils/curry gfx/with-img "graphics/light_helmet.png")
-    :sun (utils/curry gfx/with-img "graphics/sun.png")}))
+   {:light
+    {:image (utils/curry gfx/with-img "graphics/light.png")}
+    
+    :light-helmet
+    {:image (utils/curry gfx/with-img "graphics/light_helmet.png")}
+    
+    :sun
+    {:image (utils/curry gfx/with-img "graphics/sun.png")}}))
 
 (defn kind-total [kind]
   (or (kind @*kind-totals*) 0))
 
 (defn play-sound [key]
   (when *media-player*
-    (.play *media-player* (name key))))
+    (.play *media-player* (name key) false)))
 
 (defprotocol Collectable
   (collect [c]))
@@ -127,35 +133,35 @@
      (swap! obj conj {slot max-cooldown})))
 
 (defrecord Viewport [dims particle]
-  showoff.showoff.Rectable
+  Rectable
   (to-rect [vp]
     (let [[w h] dims
           [x y] (:position @particle)]
       [x y w h])) ;; expressed in tiles
 
-  showoff.showoff.Tickable
+  Tickable
   (tick [vp]
     (reset! particle (integrate-particle @particle)))
 
-  showoff.showoff.Indexed
-  (indexed? [vp] false))
+  MapIndexed
+  (map-indexed? [vp] false))
 
 (defrecord OverlayImage [position img]
-  showoff.showoff.Rectable
+  Rectable
   (to-rect [obj]
     (let [[w h] (inverse-transform-dims (gfx/img-dims img))
           [x y] position]
       [x y w h]))
 
-  showoff.showoff.Drawable
+  Drawable
   (draw [obj ctx]
     (draw-sprite ctx img position)))
 
 (defrecord StaticCollectable [position rec]
-  showoff.showoff.Rectable
+  Rectable
   (to-rect [c] (posrec->rect position rec))
 
-  showoff.showoff.Drawable
+  Drawable
   (draw [c ctx] (draw-sprite ctx (:image rec) position))
 
   Collectable
@@ -172,7 +178,7 @@
 
 ;;; bag (we need to be able to tick this)
 (defrecord Bag [contents]
-  showoff.showoff.Tickable
+  Tickable
   (tick [b] (doseq [item @contents]
               (tick item))))
 
@@ -209,12 +215,12 @@ thing"
     rec))
 
 (defrecord Switch [position state target]
-  showoff.showoff.Rectable
+  Rectable
   (to-rect [c]
     (let [[x y] position]
       [(+ x (/ 5 16)) (+ y (/ 3 16)) (/ 6 16) (/ 10 16)]))
   
-  showoff.showoff.Drawable
+  Drawable
   (draw [c ctx]
     (let [onoff (if @state :on :off)
           sprite (-> *light-sprite* onoff :image)]
@@ -226,27 +232,27 @@ thing"
     (enable target)))
 
 (defrecord SwitchableLight [position state]
-  showoff.showoff.Rectable
+  Rectable
   (to-rect [obj]
     (let [[w h] (inverse-transform-dims (gfx/img-dims (@*overlay-assets* :light-helmet)))
           [x y] position]
       [x y w h]))
 
-  showoff.showoff.Drawable
+  Drawable
   (draw [c ctx]
     (when @state
-      (draw-sprite ctx (@*overlay-assets* :light) position))
-    (draw-sprite ctx (@*overlay-assets* :light-helmet) position))
+      (draw-sprite ctx (-> @*overlay-assets* :light :image) position))
+    (draw-sprite ctx (-> @*overlay-assets* :light-helmet :image) position))
 
   Enablable
   (enable [c]
     (swap! state not)))
 
 (defrecord Jackhammer [position rec state]
-  showoff.showoff.Rectable
+  Rectable
   (to-rect [c] (posrec->rect position rec))
 
-  showoff.showoff.Drawable
+  Drawable
   (draw [c ctx] (draw-sprite ctx (:image rec) position))
 
   Iconic
@@ -266,10 +272,10 @@ thing"
         (add-entity @*current-map* (add-collectable :rubble (map/idx->coords @*current-map* idx) (take-brick idx)))))))
 
 (defrecord Blowtorch [position rec state]
-  showoff.showoff.Rectable
+  Rectable
   (to-rect [c] (posrec->rect position rec))
 
-  showoff.showoff.Drawable
+  Drawable
   (draw [c ctx] (draw-sprite ctx (:image rec) position))
 
   Iconic
@@ -316,10 +322,10 @@ thing"
       (swap! *bag* conj (ConsumableStack. key spec (atom [item]))))))
 
 (defrecord Rubble [position rec map-rec]
-  showoff.showoff.Rectable
+  Rectable
   (to-rect [c] (posrec->rect position rec))
 
-  showoff.showoff.Drawable
+  Drawable
   (draw [c ctx] (draw-sprite ctx (:image rec) position))
 
   Iconic
@@ -342,7 +348,7 @@ thing"
                                         (:direction @(:particle user)) fillable?)]
         (map/set-map-idx @*current-map* idx (conj map-rec {:used true})))))
 
-  cljs.core.IHash
+  IHash
   (-hash [c]
     (.getUid js/goog c)))
 
@@ -361,7 +367,7 @@ thing"
   (or (:time @(:state timer)) 0))
 
 (defrecord Timer [state]
-  showoff.showoff.Tickable
+  Tickable
   (tick [c]
     (let [last-time (timer-time c)]
       (swap! state conj {:time (+ last-time showoff.showoff.+secs-per-tick+)}))))
@@ -519,9 +525,12 @@ thing"
     {:blowtorch [[5 22]]
      :jackhammer [[9 5]]
      :key [[21 24] [30 22] [31 22] [32 22] [33 22] [59 39] [6 49] [7 49] [8 49] [9 49] [22 29] [58 59] [8 56] [47 31]]}
-    :map "graphics/world2.gif"}
+    :map "graphics/world2.gif"
+    :level-setup-function :house
+    }
 
-   {:backdrop "graphics/backdrop.png", :initial-bag [:fist], :player [2 60], :overlays [[:sun [14 8]]], :items {:blowtorch [[61 60]], :jackhammer [[30 27]], :key [[3 60] [10 53] [9 53] [8 53] [57 53] [50 36] [50 35] [12 47] [33 28] [31 28] [9 52] [8 52] [8 51] [45 41] [19 39] [41 26]]}, :map "graphics/world4.gif"}
+   {:initial-bag [:fist], :player [2 60], :overlays [[:sun [14 8]]], :items {:blowtorch [[61 60]], :jackhammer [[30 27]], :key [[3 60] [10 53] [9 53] [8 53] [57 53] [50 36] [50 35] [12 47] [33 28] [31 28] [9 52] [8 52] [8 51] [45 41] [19 39] [41 26]]}, :map "graphics/world4.gif"}
+
 
    {:backdrop "graphics/backdrop.png"
     :initial-bag [:fist]
@@ -538,10 +547,20 @@ thing"
   (let [idx @*current-level-index*]
     (*levels* idx)))
 
+(defmulti level-specific-setup :level-setup-function)
+
+(defmethod level-specific-setup nil
+  [level]
+  nil)
+
+(defmethod level-specific-setup :house
+  [level]
+  (let [light (SwitchableLight. [38 17] (atom true))]
+    (swap! *overlay-entities* conj light)
+    (add-entity @*current-map* (Switch. [51 29] (atom false) light))))
+
 (defn cycle-next-level []
   (swap! *current-level-index* (fn [v] (mod (inc v) (count *levels*)))))
-
-(def *overlay-entities* (atom nil))
 
 (defn with-level-assets [callback]
   (utils/with-loaded-assets
@@ -556,6 +575,17 @@ thing"
       (set! *backdrop* (:backdrop assets))
 
       (callback))))
+
+(defn with-loaded-images [spec callback]
+  "execute the asset loaders found under the :image key and then
+replace the :image key with the result"
+  (let [map-keys (keys spec)
+        image-loaders (map #(-> spec % :image) map-keys)
+        asset-map (zipmap map-keys image-loaders)]
+    (utils/with-loaded-assets asset-map
+      (fn [assets]
+        (let [with-images (map #(conj (% spec) {:image (% assets)}) map-keys)]
+          (callback (zipmap map-keys with-images)))))))
 
 (defn with-persistent-assets [callback]
   (utils/with-loaded-assets
@@ -572,7 +602,7 @@ thing"
      (utils/curry gfx/with-img "graphics/dialog.png")
 
      :overlays
-     (utils/curry utils/with-loaded-assets @*overlay-assets*)
+     (utils/curry with-loaded-images @*overlay-assets*)
      
      }
 
@@ -670,12 +700,12 @@ thing"
   (Math/floor (/ (timer-value mutable place) scale)))
 
 (defrecord Player [particle brain]
-  showoff.showoff.Rectable
+  Rectable
   (to-rect [player]
     (let [[x y] (:position @particle)]
       [(+ x 0.1) (+ y 0.3) 0.8 0.7]))
 
-  showoff.showoff.Tickable
+  Tickable
   (tick [player]
     (cooldown-tick particle)
     (timer-tick particle :walk-timer)
@@ -766,12 +796,14 @@ thing"
   ;; add the overlays
   (reset! *overlay-entities*
           (map (fn [[key pos]]
-                 (OverlayImage. pos (key @*overlay-assets*)))
-               (:overlays (current-level)))))
+                 (OverlayImage. pos (-> @*overlay-assets* key :image)))
+               (:overlays level)))
+
+  (level-specific-setup level))
 
 (defn setup-world [player-brain callback]
   (empty-bag)
-  (clear-entities)
+  (clear-entities @*current-map*)
   (reset! *keys-collected* 0)
   (reset! *bricks-destroyed* 0)
   
@@ -815,10 +847,6 @@ thing"
   (reset! *kind-totals* {})
   (add-level-items (current-level))
 
-  (let [light (SwitchableLight. [38 17] (atom true))]
-    (swap! *overlay-entities* conj light)
-    (add-entity @*current-map* (Switch. [51 29] (atom false) light)))
-  
   (add-entity @*current-map* *viewport*)
   (add-entity @*current-map* *player*)
   (add-entity @*current-map* (Bag. *bag*))
@@ -873,7 +901,10 @@ thing"
     (let [ctx (gfx/context (display))
           [vx vy _ _] (viewport-rect)]
       (gfx/clear (display))
-      (.drawImage ctx *backdrop* (- 0 50 (* 13 vx)) (- 0 10 (* 13 vy)))
+
+      (when *backdrop*
+        (.drawImage ctx *backdrop* (- 0 50 (* 13 vx)) (- 0 10 (* 13 vy))))
+      
       (map/draw ctx @*current-map* (viewport-rect)
                 showoff.showoff.*tile-in-world-dims*)
       (draw-entities @*current-map* ctx)
@@ -1038,12 +1069,12 @@ thing"
   Brush
   (brush-apply [overlay position]
     (swap! *overlay-entities* conj
-           (OverlayImage. position (@*overlay-assets* kind)))
+           (OverlayImage. position (-> @*overlay-assets* kind :image)))
     (event/dispatch-event
      (event/make :add-overlay {:kind kind :position position})))
 
   (brush-cursor [overlay]
-    (@*overlay-assets* kind)))
+    (-> @*overlay-assets* kind :image)))
 
 (def *current-brush* (atom {:div nil :brush (FistBrush.)}))
 
@@ -1084,12 +1115,12 @@ thing"
     (gevents/listen brush-div "click" #(select-brush brush brush-div))))
 
 (defrecord EditorViewport [pos brain]
-  showoff.showoff.Rectable
+  Rectable
   (to-rect [view]
     (let [[x y] @pos]
       [x y 20 15]))
 
-  showoff.showoff.Tickable
+  Tickable
   (tick [view]
     (when (brain/state? brain :left)
       (let [[x y] @pos]
@@ -1107,8 +1138,8 @@ thing"
       (let [[x y] @pos]
         (reset! pos [x (inc y)]))))
 
-  showoff.showoff.Indexed
-  (indexed? [view] false))
+  MapIndexed
+  (map-indexed? [view] false))
 
 (defn editor-mouseclicked [ge]
   (brush-apply (:brush @*current-brush*) (mouse-position)))
